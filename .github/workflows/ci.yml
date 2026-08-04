@@ -1,0 +1,19 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  scan:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Run devmap scan (json)
+        run: bun run src/index.ts --json
+      - name: Build single binary
+        if: matrix.os == 'ubuntu-latest'
+        run: bun build --compile --minify src/index.ts --outfile dist/devmap

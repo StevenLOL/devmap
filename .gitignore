@@ -1,0 +1,18 @@
+# Build artifacts
+dist/
+node_modules/
+
+# Local scan output / logs
+*.log
+.devmap/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Dev-only staging code (intentionally NOT shipped to production/GitHub).
+# These are alternative renderers kept in the dev workspace (devinfo/src/output/).
+src/output/pretty.ts
+src/output/markdown.ts
