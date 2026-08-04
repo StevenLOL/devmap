@@ -15,8 +15,36 @@
 
 ## Requirements
 
-- [Bun](https://bun.sh) runtime.
+- To **run from source**: the [Bun](https://bun.sh) runtime.
+- To **use the published package** (`npm i -g devmap`): Node.js 18+ (no Bun needed — it ships a Node-runnable bundle).
 - Windows / macOS / Linux.
+
+## Install
+
+Install the prebuilt bundle (runs on Node, no Bun required) via the official one-liner:
+
+```bash
+# Linux / macOS / Git Bash / WSL
+bash <(curl -fsSL https://raw.githubusercontent.com/StevenLOL/devmap/main/install.sh)
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/StevenLOL/devmap/main/install.ps1 | iex
+```
+
+Or install manually from the official sources:
+
+```bash
+npm install -g devmap --registry=https://registry.npmjs.org/   # primary: real Node-runnable bundle
+pip install --user devmap                                        # fallback: thin wrapper (still needs Node)
+```
+
+Then verify:
+
+```bash
+devmap scan
+```
+
+> Prefer **npm** — it ships the real bundle. The PyPI package is a thin wrapper that still requires Node at runtime.
 
 ## Usage
 
