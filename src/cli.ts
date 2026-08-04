@@ -421,9 +421,11 @@ function printHelp(): void {
   console.log(`devmap v${VERSION} — machine dev-environment source of truth
 
 Usage:
-  devmap scan                scan and render nicely (default)
+  devmap [scan] [options]    scan and render nicely (scan is the DEFAULT — 'devmap' alone is enough)
   devmap query <tool>        query a generated manifest (devmap.json)
   devmap devdiff [a] [b]     compare two manifests (environment drift / cross-machine consistency)
+
+  Tip: every 'devmap scan ...' also works as just 'devmap ...' (the 'scan' word is optional).
 
 scan options:
   --json            emit machine-readable JSON (devmap.json schema)

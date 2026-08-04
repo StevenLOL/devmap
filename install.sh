@@ -15,10 +15,10 @@ if command -v npm >/dev/null 2>&1; then
   npm install -g devmap --registry=https://registry.npmjs.org/
 elif command -v pip3 >/dev/null 2>&1; then
   echo "    npm not found — installing via pip (requires Node at runtime)"
-  pip3 install --user devmap
+  pip3 install --user --index-url https://pypi.org/simple devmap
 elif command -v pip >/dev/null 2>&1; then
   echo "    npm not found — installing via pip (requires Node at runtime)"
-  pip install --user devmap
+  pip install --user --index-url https://pypi.org/simple devmap
 else
   echo "    ERROR: neither npm nor pip is available." >&2
   echo "    Install Node.js first: https://nodejs.org (then re-run this script)" >&2
@@ -28,7 +28,7 @@ fi
 echo "==> Verifying..."
 if command -v devmap >/dev/null 2>&1; then
   devmap --version 2>/dev/null || devmap --help >/dev/null 2>&1 || true
-  echo "==> Done. Try: devmap scan"
+  echo "==> Done. Try: devmap   (or: devmap --json / devmap --report)"
 else
   echo "==> Installed, but 'devmap' is not on PATH."
   echo "    Restart your shell, or run the global bin dir directly."

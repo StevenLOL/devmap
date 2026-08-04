@@ -35,41 +35,44 @@ Or install manually from the official sources:
 
 ```bash
 npm install -g devmap --registry=https://registry.npmjs.org/   # primary: real Node-runnable bundle
-pip install --user devmap                                        # fallback: thin wrapper (still needs Node)
+pip install --user --index-url https://pypi.org/simple devmap     # fallback: thin wrapper (still needs Node; official PyPI)
 ```
 
 Then verify:
 
 ```bash
-devmap scan
+devmap
 ```
 
 > Prefer **npm** — it ships the real bundle. The PyPI package is a thin wrapper that still requires Node at runtime.
 
 ## Usage
 
+`devmap` **defaults to `scan`** — you can drop the `scan` word entirely. `devmap` and `devmap scan` are identical.
+
 Run directly from source (no build step):
 
 ```bash
-bun run src/index.ts scan
+bun run src/index.ts            # scan (default)
+bun run src/index.ts scan       # explicit, same thing
 ```
 
-If installed globally (`npm i -g devmap`, once published), the `devmap` bin works too:
+If installed globally (`npm i -g devmap`), the `devmap` bin works too — and `scan` is optional there as well:
 
 ```bash
-devmap scan
+devmap                           # same as `devmap scan`
 ```
 
-### `scan` — scan and print
+### `scan` — scan and print (the default subcommand; `scan` is optional)
 
 ```bash
-devmap scan                        # pretty-print to terminal, write ~/.devmap/devmap.json
-devmap scan --json                # machine-readable JSON (devmap.json schema) to stdout
-devmap scan --report              # full markdown report
-devmap scan --scan-root C:\src     # also scan project-local envs under a root (comma-separated for many)
-devmap scan --wsl-deep            # also wake stopped WSL distros and probe their tools (slower)
-devmap scan --outdated            # hit PyPI to list upgradable pip/conda packages (slower, needs network)
-devmap scan --ci                  # exit code 1 if any error-severity issue is found
+devmap                          # pretty-print to terminal, write ~/.devmap/devmap.json
+devmap --json                   # machine-readable JSON (devmap.json schema) to stdout
+devmap --report                 # full markdown report
+devmap --scan-root C:\src       # also scan project-local envs under a root (comma-separated for many)
+devmap --wsl-deep               # also wake stopped WSL distros and probe their tools (slower)
+devmap --outdated               # hit PyPI to list upgradable pip/conda packages (slower, needs network)
+devmap --ci                     # exit code 1 if any error-severity issue is found
 ```
 
 Key `scan` flags:
