@@ -26,9 +26,14 @@ import { execSync } from "node:child_process";
 // --- Windows terminal UTF-8 display fix ---
 // Background: cmd.exe / old PowerShell conhost default code page is GBK (936), which decodes this
 // program's UTF-8 output as GBK, producing mojibake. Windows Terminal / Git Bash are already UTF-8 and unaffected.
-// Fix: switch to UTF-8 code page (65001) under a real console (TTY); no-op for non-TTY (pipe/redirect).
-// If chcp is unavailable (e.g. some MSYS) or already UTF-8, silently skip without affecting output.
-if (process.platform === "win32" && process.stdout.isTTY) {
+// Fix: switch to UTF-8 code page (65001) on ANY Windows process, NOT gated on process.stdout.isTTY.
+//   Why unconditionally: when launched via the npm `devmap.cmd` shim from PowerShell, node's
+//   stdout/stderr are NOT seen as a TTY (isTTY === false), yet the console still decodes output bytes
+//   with the legacy code page — so gating on isTTY skipped chcp and produced mojibake. chcp changes the
+//   *whole console* code page (covers both stdout and stderr) and is a no-op when already UTF-8 or when
+//   there is no console (redirect/CI: output is raw UTF-8 bytes, unaffected). If chcp is unavailable
+//   (e.g. some MSYS), silently skip — UTF-8 terminals are unaffected.
+if (process.platform === "win32") {
   try {
     execSync("chcp 65001 > nul 2>&1", { stdio: "ignore" });
   } catch {

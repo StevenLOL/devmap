@@ -1,6 +1,6 @@
 {
   "name": "devmap",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A source-of-truth scanner and governance layer for your machine's development environment: one command maps the whole dev setup, draws the PATH-conflict graph, and surfaces ghost binaries and multi-version collisions.",
   "type": "module",
   "bin": {
