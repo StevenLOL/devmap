@@ -6,6 +6,7 @@ import { locationOf, locationTag } from "./install";
 import { runScan } from "./scan";
 import { queryManifest } from "./query";
 import { diffManifests } from "./diff";
+import { clean } from "./glyphs";
 import "./detector/system";
 import "./detector/runtimes";
 import "./detector/pkgmgrs";
@@ -39,6 +40,17 @@ if (process.platform === "win32") {
   } catch {
     /* ignore: environment lacking chcp does not affect UTF-8 terminals */
   }
+}
+
+// Windows console / PowerShell decodes this program's UTF-8 output with the legacy code page (GBK),
+// so any multibyte display glyph mojibake. console.* is used ONLY for human-readable text (the pretty
+// report, help, devdiff, errors); machine output (--json / --report) goes through emitText and must
+// stay raw UTF-8. On Windows, sanitize console output to ASCII-safe glyphs. See glyphs.ts for the why.
+if (process.platform === "win32") {
+  const olog = console.log.bind(console);
+  console.log = (...a: unknown[]) => olog(...a.map((x) => (typeof x === "string" ? clean(x) : x)));
+  const oerr = console.error.bind(console);
+  console.error = (...a: unknown[]) => oerr(...a.map((x) => (typeof x === "string" ? clean(x) : x)));
 }
 
 const ALL_SHELLS: ShellId[] = ["current", "powershell", "gitbash", "wsl"];
@@ -135,7 +147,7 @@ async function cmdScan(opts: Record<string, string | boolean>, pos: string[]): P
     emitText(JSON.stringify(manifest, null, 2), opts.bom === true);
   } else if (opts.report) {
     // report needs byName; here we render a degraded manifest view (markdown simplifies via conflicts)
-    emitText(renderMarkdownLite(manifest), opts.bom === true);
+    emitText(clean(renderMarkdownLite(manifest)), opts.bom === true);
   } else {
     renderPrettyFromManifest(manifest);
     if (opts["no-manifest"] !== true) {
