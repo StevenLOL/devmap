@@ -52,13 +52,28 @@ export class ScanProgress {
     else this.render();
   }
 
+  private availWidth(): number {
+    const c = (process.stderr as { columns?: number }).columns;
+    return typeof c === "number" && c >= 40 ? c : 90;
+  }
+
   private render(): void {
     if (!this.tty) return;
     const t = ((Date.now() - this.started) / 1000).toFixed(1);
     const spin = SPINNERS[Math.floor(Date.now() / 110) % SPINNERS.length];
-    const cur =
-      clean(([...this.inflight].join("+") + (this.extra ? G.dot + " " + this.extra : "")) || G.mdash);
-    const msg = `${spin} scanning ${this.doneCount}/${this.total} ${G.dot} running: ${cur} ${G.dot} elapsed ${t}s`;
+    const rawCur =
+      ([...this.inflight].join("+") + (this.extra ? G.dot + " " + this.extra : "")) || G.mdash;
+    let cur = clean(rawCur);
+    const prefix = `${spin} scanning ${this.doneCount}/${this.total} ${G.dot} running: `;
+    const suffix = ` ${G.dot} elapsed ${t}s`;
+    // Cap the running line to the terminal width so it stays on ONE line and the
+    // carriage-return overwrite keeps working (a wrapped line can never be cleared).
+    const budget = this.availWidth() - prefix.length - suffix.length - 1;
+    if (budget > 6 && cur.length > budget) {
+      const ell = process.platform === "win32" ? "..." : "…";
+      cur = cur.slice(0, Math.max(4, budget - ell.length)).trimEnd() + ell;
+    }
+    const msg = `${prefix}${cur}${suffix}`;
     process.stderr.write(`\r\x1b[K${msg}`);
   }
 
