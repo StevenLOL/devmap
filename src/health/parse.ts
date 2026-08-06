@@ -139,10 +139,14 @@ export function parseCondaDoctor(text: string): HealthParse {
     return { status: "ok", summary: "conda environment healthy", detail: t };
   }
   const total = real.reduce((a, p) => a + p.items, 0);
-  const detail = real.map((p) => `${p.name}: ${p.items}`).join("\n");
+  // Keep the per-section tally FIRST (stable, machine-friendly), then append the raw
+  // report so `--json` / `--report` still show *which packages* are affected. Without
+  // this the failing case carried less detail than the healthy one.
+  const tally = real.map((p) => `${p.name}: ${p.items}`).join("\n");
+  const raw = t.length > 4000 ? t.slice(0, 4000) + "\n... (truncated)" : t;
   return {
     status: "warn",
     summary: `conda doctor: ${real.length} check${real.length === 1 ? "" : "s"} failed (${total} affected files)`,
-    detail,
+    detail: `${tally}\n\n${raw}`,
   };
 }

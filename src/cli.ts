@@ -198,7 +198,7 @@ async function cmdQuery(opts: Record<string, string | boolean>, pos: string[]): 
 
   console.log(`\x1b[1m🔍 query:\x1b[0m ${selector || "(all)"}  \x1b[2m(source: ${source})\x1b[0m`);
   for (const g of result.groups) {
-    console.log(`  \x1b[36m${g.category}\x1b[0m ${g.id}  \x1b[2m(${g.installs.length})\x1b[0m`);
+    console.log(`  \x1b[36m${catLabel(g.id, g.category)}\x1b[0m ${g.id}  \x1b[2m(${g.installs.length})\x1b[0m`);
     for (const inst of g.installs) {
       const loc = locationOf(inst);
       const tag =
@@ -320,6 +320,35 @@ function bucketOf(sev: string): CheckBucket {
   return "ok";
 }
 
+// Semantic category label for the human-facing views.
+//
+// The JSON manifest groups tools by *detector* (runtimes / packageManagers / ides) so the schema
+// stays stable, but that coarse grouping mislabels several tools: `go`/`rustc` are compilers /
+// toolchains (not language runtimes); `git`/`docker`/`kubectl` are developer tools (not package
+// managers); `nvm`/`pyenv` are version managers. We refine the *displayed* label per tool id while
+// leaving the manifest itself untouched.
+const CATEGORY: Record<string, string> = {
+  // language runtimes
+  node: "runtime", python: "runtime", ruby: "runtime", java: "runtime", bun: "runtime",
+  // compilers / toolchains (detected under "runtimes" but not runtimes)
+  go: "toolchain", rustc: "toolchain",
+  // package managers
+  npm: "pkg", pip: "pkg", pip3: "pkg", conda: "pkg", cargo: "pkg",
+  brew: "pkg", winget: "pkg", scoop: "pkg", poetry: "pkg", yarn: "pkg", pnpm: "pkg",
+  // version managers (detected under "packageManagers" but not package managers)
+  nvm: "vermgr", pyenv: "vermgr",
+  // developer tools (detected under "packageManagers" but not package managers)
+  git: "tool", docker: "tool", kubectl: "tool",
+};
+// Map a tool id to its display category; fall back to the detector group when unknown.
+function catLabel(id: string, fallbackKey: string): string {
+  if (CATEGORY[id]) return CATEGORY[id];
+  if (fallbackKey === "runtimes") return "runtime";
+  if (fallbackKey === "packageManagers") return "pkg";
+  if (fallbackKey === "ides") return "ide";
+  return fallbackKey;
+}
+
 // pretty render for scan (consumes the manifest directly to avoid re-scanning)
 function renderPrettyFromManifest(m: any): void {
   const sys = m.system || {};
@@ -328,7 +357,7 @@ function renderPrettyFromManifest(m: any): void {
   console.log("  " + "─".repeat(40));
   for (const key of ["runtimes", "packageManagers", "ides"] as const) {
     for (const g of m[key] || []) {
-      console.log(`  \x1b[36m${key === "runtimes" ? "runtime" : key === "packageManagers" ? "pkg" : "ide"}\x1b[0m ${g.id}  \x1b[2m(${g.installs.length})\x1b[0m`);
+      console.log(`  \x1b[36m${catLabel(g.id, key)}\x1b[0m ${g.id}  \x1b[2m(${g.installs.length})\x1b[0m`);
       for (const inst of g.installs.slice(0, 6)) {
         const tag = inst.onPath
           ? ""
@@ -448,7 +477,7 @@ function renderMarkdownLite(m: any): string {
   for (const key of ["runtimes", "packageManagers", "ides"] as const) {
     lines.push(`## ${key}`);
     for (const g of m[key] || []) {
-      lines.push(`- **${g.id}** (${g.installs.length})`);
+      lines.push(`- **${g.id}** _${catLabel(g.id, key)}_ (${g.installs.length})`);
       for (const inst of g.installs) {
         const tag = locationTag(inst);
         lines.push(`  - ${inst.path} — ${inst.version || "?"}${tag ? ` (${tag})` : ""}`);
