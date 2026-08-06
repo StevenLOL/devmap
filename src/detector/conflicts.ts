@@ -5,6 +5,21 @@ import { isIsolated } from "../install";
 import { pathDirs, whichInDirs, scanBrokenSymlinks } from "../platform/exec";
 import { shellPathDirs, shellName } from "../platform/shells";
 
+/**
+ * Platform probes computeConflicts depends on. Injected so the conflict layer can be
+ * unit-tested deterministically (PATH contents, broken-symlink scan, cross-shell which)
+ * without touching the real machine. Defaults to the real implementations.
+ */
+export interface ConflictPlatform {
+  pathDirs: () => string[];
+  whichInDirs: (name: string, dirs: string[]) => string[];
+  scanBrokenSymlinks: (dirs: string[]) => { path: string; reason: string }[];
+  shellPathDirs: (s: ShellId) => string[];
+  shellName: (s: ShellId) => string;
+}
+
+const realPlatform: ConflictPlatform = { pathDirs, whichInDirs, scanBrokenSymlinks, shellPathDirs, shellName };
+
 export interface ConflictReport {
   checks: Check[];
   multiVersionTools: { id: string; count: number; versions: (string | null)[] }[];
@@ -13,7 +28,12 @@ export interface ConflictReport {
   offPathNotes: { id: string; path: string }[];
 }
 
-export function computeConflicts(groups: ToolGroup[], shells: ShellId[], disabled?: Set<string>): ConflictReport {
+export function computeConflicts(
+  groups: ToolGroup[],
+  shells: ShellId[],
+  disabled?: Set<string>,
+  platform: ConflictPlatform = realPlatform,
+): ConflictReport {
   const checks: Check[] = [];
   const multiVersionTools: ConflictReport["multiVersionTools"] = [];
   const pathConflicts: ConflictReport["pathConflicts"] = [];
@@ -43,7 +63,7 @@ export function computeConflicts(groups: ToolGroup[], shells: ShellId[], disable
     // 2) Cross-shell resolution differences (H2)
     if (multiShell) {
       const res: Record<string, string | null> = {};
-      for (const s of shells) res[s] = (whichInDirs(g.id, shellPathDirs(s)) || [])[0] || null;
+      for (const s of shells) res[s] = (platform.whichInDirs(g.id, platform.shellPathDirs(s)) || [])[0] || null;
       g.shellResolution = res;
       const vals = Object.values(res).filter(Boolean) as string[];
       if (new Set(vals).size > 1) {
@@ -53,7 +73,7 @@ export function computeConflicts(groups: ToolGroup[], shells: ShellId[], disable
             "mismatch",
             "info",
             `${g.id} resolves differently across shells`,
-            shells.map((s) => `${shellName(s)} → ${res[s] || "(not found)"}`).join("  |  "),
+            shells.map((s) => `${platform.shellName(s)} → ${res[s] || "(not found)"}`).join("  |  "),
             vals,
           ),
         );
@@ -127,19 +147,19 @@ export function computeConflicts(groups: ToolGroup[], shells: ShellId[], disable
   //    the same ghost is not reported repeatedly.
   const seenDir = new Set<string>();
   const uniqueDirs: string[] = [];
-  for (const d of pathDirs()) {
+  for (const d of platform.pathDirs()) {
     const k = d.toLowerCase();
     if (seenDir.has(k)) continue;
     seenDir.add(k);
     uniqueDirs.push(d);
   }
-  const ghosts = scanBrokenSymlinks(uniqueDirs);
+  const ghosts = platform.scanBrokenSymlinks(uniqueDirs);
 
   // 6) Duplicate PATH directories (hygiene/performance + amplifies shadowing): the same directory
   //    string appears more than once in PATH. This is one of the root causes behind H1 "PATH
   //    conflict", so it is reported on its own to make cleanup easy (documented in PRD §17).
   const dirFreq = new Map<string, number>();
-  for (const d of pathDirs()) {
+  for (const d of platform.pathDirs()) {
     const k = d.toLowerCase();
     dirFreq.set(k, (dirFreq.get(k) || 0) + 1);
   }
