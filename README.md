@@ -11,6 +11,7 @@
 - **Off-PATH awareness**: reports installed-but-not-on-PATH tools, while correctly treating version-manager environments (conda envs, nvm versions) as by-design off-PATH.
 - **Phase 2 environment layers**: vcpkg packages, per-python pip packages (incl. upgradable), apt packages (Linux), conda environments, Docker (binary + daemon + images/containers), WSL distros, Visual Studio dev shells, and project-local environments (`.venv`, `node_modules`).
 - **Three sub-commands**: `scan` (the fact source), `query` (ask the manifest), `devdiff` (compare two manifests — environment drift / cross-machine consistency).
+- **Health layer (P1)**: converges official self-checks into one view — `pip check` (broken dependency requirements, **offline by default**) and, with `--health-network`, `npm doctor` / `rustup check`. Unavailable or offline probes degrade gracefully to `info`.
 - **Zero external dependencies.** Pure TypeScript + [Bun](https://bun.sh). No `npm install` required.
 
 ## Requirements
@@ -91,6 +92,8 @@ Key `scan` flags:
 | `--ci` | Exit non-zero on any error-severity issue. |
 | `--quiet` | Suppress the live scan progress feedback (for scripts/CI). |
 | `--bom` | Prefix output with a UTF-8 BOM so Notepad-like viewers render it correctly (stdout redirect/pipe only). |
+| `--audit-deps` | Invoke installed SCA tools (OSV-Scanner/pip-audit/govulncheck/Trivy) and merge CVE findings into the report (opt-in, uses network). |
+| `--health-network` | Also run network health probes (`npm doctor` / `rustup check`); off by default to keep scans offline-fast. |
 
 ### `query` — ask the manifest
 

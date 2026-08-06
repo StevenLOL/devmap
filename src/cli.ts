@@ -143,6 +143,7 @@ async function cmdScan(opts: Record<string, string | boolean>, pos: string[]): P
     checkOutdated: opts.outdated === true,
     wslDeep: opts["wsl-deep"] === true,
     auditDeps: opts["audit-deps"] === true,
+    healthNetwork: opts["health-network"] === true,
   });
 
   if (opts.json) {
@@ -466,6 +467,7 @@ scan options:
   --wsl-deep        probe inside stopped WSL distros (default probes only running ones to avoid waking distros)
   --ci              CI gate: clean → exit 0; any warn → exit 2; any error → exit 1
   --audit-deps      dependency CVE audit via OSV-Scanner/pip-audit/govulncheck/Trivy (opt-in, uses network)
+  --health-network  run network health probes too (npm doctor / rustup check; off by default to stay offline-fast)
   --quiet           suppress scan progress feedback (for scripts/CI)
   --bom             prepend UTF-8 BOM for viewing in Notepad etc. (only on redirect/pipe)
   --version / --help
