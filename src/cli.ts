@@ -79,7 +79,8 @@ function tokenize(argv: string[]): { pos: string[]; opts: Record<string, string 
       const key = a.slice(2);
       const nxt = argv[i + 1];
       if (nxt !== undefined && !nxt.startsWith("--")) {
-        opts[key] = nxt;
+        // Repeated flags accumulate: `--disable a --disable b` == `--disable a,b`.
+        opts[key] = opts[key] !== undefined ? `${opts[key]},${nxt}` : nxt;
         i++;
       } else opts[key] = true;
     } else if (a.startsWith("-") && a.length > 1) {
@@ -141,6 +142,7 @@ async function cmdScan(opts: Record<string, string | boolean>, pos: string[]): P
     silent: opts.quiet === true,
     checkOutdated: opts.outdated === true,
     wslDeep: opts["wsl-deep"] === true,
+    auditDeps: opts["audit-deps"] === true,
   });
 
   if (opts.json) {
@@ -161,8 +163,16 @@ async function cmdScan(opts: Record<string, string | boolean>, pos: string[]): P
       }
     }
   }
-  const hasError = (manifest.checks || []).some((c: any) => c.Severity === "error");
-  return opts.ci && hasError ? 1 : 0;
+  // `--ci`: exit code for CI gating. Clean -> 0; any warn-level issue -> 2; any error-level issue -> 1.
+  // (warn=2 takes precedence over clean, but error=1 takes top precedence.)
+  if (opts.ci) {
+    const hasError = (manifest.checks || []).some((c: any) => c.Severity === "error");
+    if (hasError) return 1;
+    const hasWarn = (manifest.checks || []).some((c: any) => c.Severity === "warn");
+    if (hasWarn) return 2;
+    return 0;
+  }
+  return 0;
 }
 
 // ===================== query =====================
@@ -454,7 +464,8 @@ scan options:
   --scan-root <dir> project-local environment scan root (comma-separated; default cwd). e.g. --scan-root C:\\src
   --outdated        check pip/conda upgradable packages online (off by default: requires PyPI access and slows the scan)
   --wsl-deep        probe inside stopped WSL distros (default probes only running ones to avoid waking distros)
-  --ci              any error-level issue → exit code 1
+  --ci              CI gate: clean → exit 0; any warn → exit 2; any error → exit 1
+  --audit-deps      dependency CVE audit via OSV-Scanner/pip-audit/govulncheck/Trivy (opt-in, uses network)
   --quiet           suppress scan progress feedback (for scripts/CI)
   --bom             prepend UTF-8 BOM for viewing in Notepad etc. (only on redirect/pipe)
   --version / --help
