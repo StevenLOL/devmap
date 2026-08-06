@@ -2,7 +2,7 @@
 // Hard rule: Check / Install / ToolGroup / manifest are defined in one place; no per-layer redefinition allowed.
 
 export type Severity = "ok" | "info" | "warn" | "error" | "missing";
-export type Kind = "missing" | "conflict" | "ghost" | "mismatch" | "stale" | "vuln";
+export type Kind = "missing" | "conflict" | "ghost" | "mismatch" | "stale" | "vuln" | "secret";
 
 export interface Check {
   ID: string;            // dot-separated unique id, e.g. "path.duplicate.node"

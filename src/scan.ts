@@ -3,6 +3,7 @@ import { runDetectors } from "./detector/registry";
 import { computeConflicts, isCheckDisabled } from "./detector/conflicts";
 import { computeSecurity } from "./security/scan";
 import { computeScaInventory, runScaAudit } from "./security/sca";
+import { scanSecrets } from "./security/secrets";
 import { computeHealth, type HealthPython, type HealthCondaEnv } from "./health/scan";
 import { buildManifest } from "./output/json";
 import { ScanProgress } from "./progress";
@@ -17,6 +18,7 @@ export interface ScanOpts {
   wslDeep?: boolean; // wake stopped WSL distros for in-distro probing (default false)
   auditDeps?: boolean; // opt-in dependency CVE audit via installed SCA tools (--audit-deps; uses network)
   healthNetwork?: boolean; // opt-in network health probes (--health-network; npm doctor / rustup check need network)
+  scanSecrets?: boolean; // opt-in hardcoded-secret scan (--scan-secrets; offline, curated files only)
 }
 
 /**
@@ -107,6 +109,7 @@ export async function runScan(shells: ShellId[], disabled: Set<string>, opts: Sc
     ...computeSecurity(byName),
     ...computeScaInventory(),
     ...(opts.auditDeps ? runScaAudit(process.cwd()) : []),
+    ...(opts.scanSecrets ? scanSecrets(opts.projectRoots) : []),
   ];
 
   // Aggregate checks from all detectors (environment layer + conflict layer + security layer),

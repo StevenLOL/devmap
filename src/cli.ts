@@ -3,6 +3,7 @@
 import { VERSION } from "./version";
 import type { ShellId } from "./types";
 import { locationOf, locationTag } from "./install";
+import { startMcpServer } from "./mcp";
 import { runScan } from "./scan";
 import { queryManifest } from "./query";
 import { diffManifests } from "./diff";
@@ -144,6 +145,7 @@ async function cmdScan(opts: Record<string, string | boolean>, pos: string[]): P
     wslDeep: opts["wsl-deep"] === true,
     auditDeps: opts["audit-deps"] === true,
     healthNetwork: opts["health-network"] === true,
+    scanSecrets: opts["scan-secrets"] === true,
   });
 
   if (opts.json) {
@@ -262,7 +264,7 @@ async function cmdDevdiff(opts: Record<string, string | boolean>, pos: string[])
     const before = await resolveManifest(opts.manifest as string, shells, disabled, "devdiff-before", toRoots(opts["scan-root"]));
     A = before.manifest;
     labelA = before.source;
-    B = await runScan(shells, disabled, { projectRoots: toRoots(opts["scan-root"]) });
+    B = await runScan(shells, disabled, { projectRoots: toRoots(opts["scan-root"]), scanSecrets: opts["scan-secrets"] === true });
     labelB = "current live scan";
   }
 
@@ -543,9 +545,11 @@ scan options:
   --wsl-deep        probe inside stopped WSL distros (default probes only running ones to avoid waking distros)
   --ci              CI gate: clean → exit 0; any warn → exit 2; any error → exit 1
   --audit-deps      dependency CVE audit via OSV-Scanner/pip-audit/govulncheck/Trivy (opt-in, uses network)
+  --scan-secrets    scan a curated allowlist of HOME/project credential files for hardcoded secrets (opt-in, offline)
   --health-network  run network health probes too (npm doctor / rustup check; off by default to stay offline-fast)
   --quiet           suppress scan progress feedback (for scripts/CI)
   --bom             prepend UTF-8 BOM for viewing in Notepad etc. (only on redirect/pipe)
+  --mcp             run as an MCP server (stdio JSON-RPC) for AI IDE agents (Cursor/Cline/Claude Desktop)
   --version / --help
 
 Phase 2 environment layer (covered by this scan):
@@ -582,6 +586,13 @@ async function main(): Promise<void> {
   }
   if (opts.version || opts.v) {
     console.log(VERSION);
+    process.exit(0);
+  }
+
+  // MCP mode: hand the engine to an AI IDE agent over stdio JSON-RPC, then exit.
+  // This is a thin adapter only — no detection logic lives here (see src/mcp.ts).
+  if (opts.mcp) {
+    await startMcpServer();
     process.exit(0);
   }
 
