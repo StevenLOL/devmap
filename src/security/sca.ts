@@ -82,35 +82,41 @@ export const SCA_TOOLS: ScaTool[] = [
     auditArgs: ["-f", "json"],
     parse: (json) => {
       const out: Check[] = [];
+      // pip-audit's JSON often omits `severity` (OSV-based). A *known* vuln with unknown
+      // severity is still a real finding -> escalate to error so `--ci` breaks the build
+      // instead of silently downgrading to warn.
+      const sevOf = (s: string | undefined): "warn" | "error" => (s ? toSeverity(s) : "error");
+      // Same vuln is sometimes reported once per alias (PYSEC + GHSA). Dedup by (pkg, id).
+      const seen = new Set<string>();
+      const push = (name: string, vid: string, sev: "warn" | "error", title: string, detail: string) => {
+        const key = `${name}|${vid}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(makeCheck(`security.deps.pipaudit.${vid}`, "vuln", sev, title, detail, [name]));
+      };
       for (const dep of json?.dependencies || []) {
         for (const v of dep?.vulns || []) {
-          const sev = toSeverity(v?.severity);
+          const sev = sevOf(v?.severity);
           const vid = v?.id || "UNKNOWN";
-          out.push(
-            makeCheck(
-              `security.deps.pipaudit.${vid}`,
-              "vuln",
-              sev,
-              `${dep?.name || "?"}@${dep?.version || "?"} affected by ${vid} (${sev === "error" ? "HIGH" : "MEDIUM"})`,
-              `${vid}: ${v?.description || ""}. Fix versions: ${(v?.fix_versions || []).join(", ") || "n/a"}.`,
-              [dep?.name || ""],
-            ),
+          push(
+            dep?.name || "?",
+            vid,
+            sev,
+            `${dep?.name || "?"}@${dep?.version || "?"} affected by ${vid} (${sev === "error" ? "HIGH" : "MEDIUM"})`,
+            `${vid}: ${v?.description || ""}. Fix versions: ${(v?.fix_versions || []).join(", ") || "n/a"}.`,
           );
         }
       }
       // older pip-audit schema: top-level "vulnerabilities"
       for (const v of json?.vulnerabilities || []) {
-        const sev = toSeverity(v?.severity);
+        const sev = sevOf(v?.severity);
         const vid = v?.id || "UNKNOWN";
-        out.push(
-          makeCheck(
-            `security.deps.pipaudit.${vid}`,
-            "vuln",
-            sev,
-            `${v?.name || "?"} affected by ${vid}`,
-            `${vid}: ${v?.description || ""}.`,
-            [v?.name || ""],
-          ),
+        push(
+          v?.name || "?",
+          vid,
+          sev,
+          `${v?.name || "?"} affected by ${vid}`,
+          `${vid}: ${v?.description || ""}.`,
         );
       }
       return out;

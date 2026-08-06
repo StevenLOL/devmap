@@ -76,6 +76,41 @@ describe("pip-audit parser (legacy schema: top-level vulnerabilities[])", () => 
   test("MODERATE -> warn", () => expect(out[0].Severity).toBe("warn"));
 });
 
+describe("pip-audit parser: unknown severity escalates to error", () => {
+  const fixture = {
+    dependencies: [
+      { name: "cryptography", version: "46.0.3", vulns: [{ id: "PYSEC-2026-35", fix_versions: ["46.0.6"] }] },
+    ],
+  };
+  const out = tool("pip-audit").parse(fixture, "pip-audit");
+  test("one check", () => expect(out.length).toBe(1));
+  test("unknown severity -> error (not warn)", () => expect(out[0].Severity).toBe("error"));
+  test("still has fix version in detail", () => expect(out[0].Detail).toContain("46.0.6"));
+});
+
+describe("pip-audit parser: dedupe by (pkg, vuln id)", () => {
+  const fixture = {
+    dependencies: [
+      {
+        name: "cryptography",
+        version: "46.0.3",
+        vulns: [
+          { id: "PYSEC-2026-36", fix_versions: ["46.0.7"] },
+          { id: "PYSEC-2026-36", fix_versions: ["46.0.7"] },
+          { id: "PYSEC-2026-35", fix_versions: ["46.0.6"] },
+        ],
+      },
+    ],
+  };
+  const out = tool("pip-audit").parse(fixture, "pip-audit");
+  test("3 raw vulns -> 2 unique checks", () => expect(out.length).toBe(2));
+  test("both unique ids present", () => {
+    const ids = out.map((c) => c.ID);
+    expect(ids).toContain("security.deps.pipaudit.PYSEC-2026-36");
+    expect(ids).toContain("security.deps.pipaudit.PYSEC-2026-35");
+  });
+});
+
 describe("govulncheck parser", () => {
   const fixture = {
     Results: [
