@@ -334,7 +334,7 @@ function renderEnvironments(env: any): void {
 
   if (env.vcpkg?.installed) {
     console.log(rule);
-    console.log(`  \x1b[1mvcpkg\x1b[0m  ${plur(env.vcpkg.packages.length, "package")}  (\x1b[33m${plur(env.vcpkg.installs.length, "install")}\x1b[0m)`);
+    console.log(`  \x1b[1mvcpkg\x1b[0m  ${plur(env.vcpkg.packages.length, "package")}  (\x1b[33m${plur(env.vcpkg.installs.length, "vcpkg copy", "vcpkg copies")}\x1b[0m)`);
     for (const p of env.vcpkg.packages.slice(0, 6)) console.log(`    ${p.name}@${p.version}  \x1b[2m${p.triplet}\x1b[0m`);
   }
 
@@ -426,7 +426,7 @@ function renderMarkdownLite(m: any): string {
   }
   const env = m.environments || {};
   const envLines: string[] = [];
-  if (env.vcpkg?.installed) envLines.push(`- vcpkg: ${plur(env.vcpkg.packages.length, "package")} / ${plur(env.vcpkg.installs.length, "install")}`);
+  if (env.vcpkg?.installed) envLines.push(`- vcpkg: ${plur(env.vcpkg.packages.length, "package")} / ${plur(env.vcpkg.installs.length, "vcpkg copy", "vcpkg copies")}`);
   if (env.pip?.perInterpreter?.length)
     envLines.push(
       `- pip: ${plur(env.pip.perInterpreter.length, "interpreter")} / ${plur(env.pip.perInterpreter.reduce((a: number, p: any) => a + p.packages.length, 0), "package")}`,

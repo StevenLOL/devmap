@@ -1,7 +1,7 @@
 // vcpkg detector (Phase 2): detect the vcpkg binary (possibly multiple copies, same issue as node/npm) + installed package list.
 // Note: the earlier pkgmgrs list did not include vcpkg, so devmap was unaware of it; this detector fills that gap.
 import { register } from "./registry";
-import { whichInDirs, versionOfAsync, fileExists, pathDirs, IS_WIN, pool } from "../platform/exec";
+import { whichInDirs, fileExists, pathDirs, IS_WIN, pool } from "../platform/exec";
 import { runAsync, runBinAsync } from "../platform/exec";
 import { makeCheck } from "../check/model";
 import { join } from "node:path";
@@ -13,6 +13,15 @@ const CANDIDATES = [
   "C:\\tools\\vcpkg\\vcpkg.exe",
   "C:\\vcpkg\\vcpkg",
 ];
+
+// vcpkg uses a date + commit-hash version scheme (e.g.
+// "vcpkg package management program version 2026-07-13-bf04c909169fdbb30821c02c6eb01f1cd1295d05"),
+// which is NOT x.y.z, so the generic extractVersion() returns null. Parse it explicitly.
+export function parseVcpkgVersion(out: string | null): string | null {
+  if (!out) return null;
+  const m = out.match(/version\s+(\d{4}-\d{2}-\d{2}(?:-[0-9a-f]+)?)/i);
+  return m ? m[1] : null;
+}
 
 async function findVcpkg(): Promise<Install[]> {
   const cands: { path: string; onPath: boolean }[] = [];
@@ -30,7 +39,7 @@ async function findVcpkg(): Promise<Install[]> {
   }
   for (const p of whichInDirs("vcpkg", pathDirs())) add(p, true);
 
-  const versions = await pool(cands, 8, (c) => versionOfAsync(c.path, ["version", "--version"]));
+  const versions = await pool(cands, 8, (c) => runBinAsync(c.path, ["version"], 9000).then(parseVcpkgVersion));
   return cands.map((c, i) => ({ path: c.path, onPath: c.onPath, version: versions[i] }));
 }
 
