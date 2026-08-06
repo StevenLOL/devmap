@@ -8,7 +8,7 @@ import { pipPackagesAsync } from "./piputil";
 import { basename } from "node:path";
 import type { Check, PythonPkgReport } from "../types";
 
-function shortName(pythonPath: string): string {
+export function shortName(pythonPath: string): string {
   const lower = pythonPath.toLowerCase();
   const m = lower.match(/[\\/]envs[\\/]([^\\/]+)[\\/]/);
   if (m) return m[1];

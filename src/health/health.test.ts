@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parsePipCheck, parseNpmDoctor, parseRustupCheck } from "./parse";
+import { parsePipCheck, parseNpmDoctor, parseRustupCheck, parseCondaDoctor } from "./parse";
 import { computeHealth } from "./scan";
 
 describe("parsePipCheck", () => {
@@ -89,6 +89,51 @@ describe("parseRustupCheck", () => {
   });
 });
 
+describe("parseCondaDoctor", () => {
+  it("all ok (no problems) -> ok", () => {
+    const out = [
+      "Environment Health Report for: E:\\miniconda3",
+      "✅ The environment is consistent.",
+      "✅ The environment is listed in environments.txt file.",
+      "✅ File locking is supported.",
+      "✅ No pinned specs found in E:\\miniconda3\\conda-meta\\pinned.",
+    ].join("\n");
+    const r = parseCondaDoctor(out);
+    expect(r.status).toBe("ok");
+  });
+
+  it("altered + missing files -> warn with aggregated file count (real format has blank lines between sections)", () => {
+    // Real `conda doctor -n <env>` output separates each section header from its item list
+    // AND adjacent sections with BLANK LINES. The parser MUST keep the current section across
+    // blanks (regression: an earlier version reset `cur` on blank lines and undercounted to 0,
+    // silently reporting a broken env as healthy).
+    const out = [
+      "Environment Health Report for: E:\\miniconda3",
+      "❌ Altered Files:",
+      "gdk-pixbuf-2.44.6-hd37cd66_1: 1",
+      "yaml-cpp-0.8.0-hd77b12b_1: 4",
+      "",
+      "✅ The environment is consistent.",
+      "",
+      "❌ Missing Files:",
+      "pip-25.2-pyhc872135_1: 61",
+      "setuptools-80.9.0-py313haa95532_0: 143",
+      "",
+    ].join("\n");
+    const r = parseCondaDoctor(out);
+    expect(r.status).toBe("warn");
+    expect(r.summary).toContain("2 checks failed");
+    expect(r.summary).toContain("209 affected files"); // 1+4+61+143
+    expect(r.detail).toContain("Altered Files: 5");
+    expect(r.detail).toContain("Missing Files: 204");
+  });
+
+  it("empty output -> skipped", () => {
+    expect(parseCondaDoctor("").status).toBe("skipped");
+    expect(parseCondaDoctor("   \n  ").status).toBe("skipped");
+  });
+});
+
 describe("computeHealth (integration smoke)", () => {
   it("resolves to an array of checks without throwing and severities are valid", async () => {
     const checks = await computeHealth({});
@@ -110,4 +155,21 @@ describe("computeHealth (integration smoke)", () => {
       expect(npm.Severity).toBe("info");
     }
   });
+
+  it("emits one per-interpreter pip check when pythons passed", async () => {
+    // fake interpreter paths are not spawnable -> pip check yields "" -> parsePipCheck("") -> ok.
+    // This verifies the per-env wiring (one health.pip.<label>.check per interpreter) deterministically.
+    const checks = await computeHealth({
+      pythons: [
+        { path: "C:\\nope\\python.exe", label: "fake" },
+        { path: "C:\\nope2\\python3.exe", label: "fake2" },
+      ],
+    });
+    const pip = checks.filter((c) => c.ID.startsWith("health.pip."));
+    expect(pip.length).toBe(2);
+    expect(pip.every((c) => c.ID.startsWith("health.pip.") && c.ID.endsWith(".check"))).toBe(true);
+    expect(pip.some((c) => c.ID === "health.pip.fake.check")).toBe(true);
+    expect(pip.some((c) => c.ID === "health.pip.fake2.check")).toBe(true);
+  });
 });
+

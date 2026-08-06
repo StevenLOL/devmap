@@ -11,7 +11,7 @@
 - **Off-PATH awareness**: reports installed-but-not-on-PATH tools, while correctly treating version-manager environments (conda envs, nvm versions) as by-design off-PATH.
 - **Phase 2 environment layers**: vcpkg packages, per-python pip packages (incl. upgradable), apt packages (Linux), conda environments, Docker (binary + daemon + images/containers), WSL distros, Visual Studio dev shells, and project-local environments (`.venv`, `node_modules`).
 - **Three sub-commands**: `scan` (the fact source), `query` (ask the manifest), `devdiff` (compare two manifests — environment drift / cross-machine consistency).
-- **Health layer (P1)**: converges official self-checks into one view — `pip check` (broken dependency requirements, **offline by default**) and, with `--health-network`, `npm doctor` / `rustup check`. Unavailable or offline probes degrade gracefully to `info`.
+- **Health layer (P1)**: converges official self-checks into one view, **per environment**. Offline by default: `pip check` runs for **every** Python interpreter, and `conda doctor` runs for **every** conda env. With `--health-network`, `npm doctor` / `rustup check` are added. Missing/offline probes degrade gracefully to `info` (skipped). Passing checks are summarized as `✓ N checks passed` — only `warn`/`error` surface under `issues (N)`.
 - **Zero external dependencies.** Pure TypeScript + [Bun](https://bun.sh). No `npm install` required.
 
 ## Requirements

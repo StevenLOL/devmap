@@ -214,12 +214,23 @@ async function cmdQuery(opts: Record<string, string | boolean>, pos: string[]): 
     const c = result.conflicts;
     console.log(`  \x1b[1mconflicts\x1b[0m  multiVersion=${c.multiVersionTools?.length || 0}  path=${c.pathConflicts?.length || 0}  ghost=${c.ghostBinaries?.length || 0}`);
   }
-  if (result.checks && result.checks.length) {
-    console.log(`  \x1b[1missues (${result.checks.length})\x1b[0m`);
-    for (const c of result.checks) {
+  const allChecks = result.checks || [];
+  const issues = allChecks.filter((c: any) => bucketOf(c.Severity) === "issue");
+  const infos = allChecks.filter((c: any) => bucketOf(c.Severity) === "info");
+  const oks = allChecks.filter((c: any) => bucketOf(c.Severity) === "ok");
+  if (issues.length) {
+    console.log(`  \x1b[1missues (${issues.length})\x1b[0m`);
+    for (const c of issues) {
       const sev = sevColor(c.Severity);
       console.log(`    ${sev}${c.Severity}\x1b[0m  ${c.ID}  ${c.Label}`);
     }
+  }
+  if (infos.length) {
+    console.log(`  \x1b[1minfo (${infos.length})\x1b[0m`);
+    for (const c of infos) console.log(`    ${sevColor(c.Severity)}${c.Severity}\x1b[0m  ${c.ID}  ${c.Label}`);
+  }
+  if (oks.length) {
+    console.log(`  \x1b[32m✓ ${oks.length} checks passed\x1b[0m`);
   }
   if (!result.groups.length && !result.checks.length && !result.conflicts) {
     console.log("  (no match)");
@@ -297,6 +308,18 @@ function sevColor(sev: string): string {
   }
 }
 
+// Bucket a check by severity so the human-facing views can separate real problems from
+// informational notes and passing checks. "issues" = things needing attention; "info" =
+// notes/findings (incl. health `skipped` probes); "ok" = checks that passed (never an issue).
+// NOTE: the JSON manifest keeps EVERY check verbatim (source of truth) — this bucketing is
+// purely a rendering concern, never applied to --json / devmap.json.
+type CheckBucket = "issue" | "info" | "ok";
+function bucketOf(sev: string): CheckBucket {
+  if (sev === "error" || sev === "warn" || sev === "missing") return "issue";
+  if (sev === "info") return "info";
+  return "ok";
+}
+
 // pretty render for scan (consumes the manifest directly to avoid re-scanning)
 function renderPrettyFromManifest(m: any): void {
   const sys = m.system || {};
@@ -316,12 +339,24 @@ function renderPrettyFromManifest(m: any): void {
       }
     }
   }
-  const checks = m.checks || [];
+  const allChecks = m.checks || [];
+  const issues = allChecks.filter((c: any) => bucketOf(c.Severity) === "issue");
+  const infos = allChecks.filter((c: any) => bucketOf(c.Severity) === "info");
+  const oks = allChecks.filter((c: any) => bucketOf(c.Severity) === "ok");
   renderEnvironments(m.environments);
-  if (checks.length) {
+  if (issues.length || infos.length || oks.length) {
     console.log("  " + "─".repeat(40));
-    console.log(`  \x1b[1missues (${checks.length})\x1b[0m`);
-    for (const c of checks) console.log(`    ${sevColor(c.Severity)}${c.Severity}\x1b[0m  ${c.ID}  ${c.Label}`);
+    if (issues.length) {
+      console.log(`  \x1b[1missues (${issues.length})\x1b[0m`);
+      for (const c of issues) console.log(`    ${sevColor(c.Severity)}${c.Severity}\x1b[0m  ${c.ID}  ${c.Label}`);
+    }
+    if (infos.length) {
+      console.log(`  \x1b[1minfo (${infos.length})\x1b[0m`);
+      for (const c of infos) console.log(`    ${sevColor(c.Severity)}${c.Severity}\x1b[0m  ${c.ID}  ${c.Label}`);
+    }
+    if (oks.length) {
+      console.log(`  \x1b[32m✓ ${oks.length} checks passed\x1b[0m`);
+    }
   }
 }
 
@@ -421,9 +456,21 @@ function renderMarkdownLite(m: any): string {
     }
     lines.push("");
   }
-  if ((m.checks || []).length) {
-    lines.push(`## issues (${m.checks.length})`);
-    for (const c of m.checks) lines.push(`- [${c.Severity}] \`${c.ID}\` ${c.Label} — ${c.Detail}`);
+  const allChecks = m.checks || [];
+  const issues = allChecks.filter((c: any) => bucketOf(c.Severity) === "issue");
+  const infos = allChecks.filter((c: any) => bucketOf(c.Severity) === "info");
+  const oks = allChecks.filter((c: any) => bucketOf(c.Severity) === "ok");
+  if (issues.length) {
+    lines.push(`## issues (${issues.length})`);
+    for (const c of issues) lines.push(`- [${c.Severity}] \`${c.ID}\` ${c.Label} — ${c.Detail}`);
+  }
+  if (infos.length) {
+    lines.push(`## info (${infos.length})`);
+    for (const c of infos) lines.push(`- [${c.Severity}] \`${c.ID}\` ${c.Label} — ${c.Detail}`);
+  }
+  if (oks.length) {
+    lines.push(`## checks passed (${oks.length})`);
+    for (const c of oks) lines.push(`- [${c.Severity}] \`${c.ID}\` ${c.Label}`);
   }
   const env = m.environments || {};
   const envLines: string[] = [];

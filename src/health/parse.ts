@@ -93,3 +93,56 @@ export function parseRustupCheck(text: string): HealthParse {
   if (upToDate.length) return { status: "ok", summary: "rustup toolchains up to date" };
   return { status: "ok", summary: "rustup check passed" };
 }
+
+// ---------------------------------------------------------------------------
+// conda doctor  (offline; "Display a health report for your environment")
+//   NOTE: `conda doctor --json` still prints the human report (NOT JSON) in
+//   conda 26.x, so we parse TEXT. Sections are headed by a ❌ (problem) or ✅
+//   (ok) glyph; problem sections then list affected packages as "pkg-1.2.3: N"
+//   (N = number of affected files for that package).
+//   Sample (conda doctor -n base):
+//     Environment Health Report for: E:\Users\Administrator\miniconda3
+//     ❌ Altered Files:
+//     gdk-pixbuf-2.44.6-hd37cd66_1: 1
+//     yaml-cpp-0.8.0-hd77b12b_1: 4
+//     ✅ The environment is consistent.
+//     ❌ Missing Files:
+//     pip-25.2-pyhc872135_1: 61
+//     setuptools-80.9.0-py313haa95532_0: 143
+export function parseCondaDoctor(text: string): HealthParse {
+  const t = (text || "").trim();
+  if (!t) return { status: "skipped", summary: "conda doctor produced no output (timed out or silent)" };
+
+  const lines = t.split(/\r?\n/).map((l) => l.trim());
+  const problemSections: { name: string; items: number }[] = [];
+  let cur: { name: string; items: number } | null = null;
+
+  for (const line of lines) {
+    if (!line) continue; // keep `cur` across blank lines (conda splits headers from items with blanks)
+    // Section header: a ❌/✅ glyph followed by a name (optionally trailing ":").
+    const hdr = line.match(/^[❌✅]\s*(.+?)\s*:?\s*$/);
+    if (hdr) {
+      const name = hdr[1].replace(/:\s*$/, "").trim();
+      cur = { name, items: 0 };
+      if (line.startsWith("❌")) problemSections.push(cur);
+      continue;
+    }
+    // Item line under a problem section: "pkg-spec-1.2.3-hash_1: 61"
+    if (cur) {
+      const m = line.match(/:\s*(\d+)\s*$/);
+      if (m) cur.items += parseInt(m[1], 10);
+    }
+  }
+
+  const real = problemSections.filter((p) => p.items > 0);
+  if (real.length === 0) {
+    return { status: "ok", summary: "conda environment healthy", detail: t };
+  }
+  const total = real.reduce((a, p) => a + p.items, 0);
+  const detail = real.map((p) => `${p.name}: ${p.items}`).join("\n");
+  return {
+    status: "warn",
+    summary: `conda doctor: ${real.length} check${real.length === 1 ? "" : "s"} failed (${total} affected files)`,
+    detail,
+  };
+}
