@@ -264,8 +264,13 @@ export function whichInDirs(name: string, dirs: string[]): string[] {
 // NOTE: the guards are `(?<![\d.])` / `(?![\d.])`, deliberately not `\b`.
 // `\b` does not fire between `v` and `2` in `v22.22.2` (both are word chars), so a
 // `\b`-anchored pattern silently truncates `v22.22.2` down to `22.2`.
-const SEMVER_RE = /(?<![\d.])\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?(?![\d.])/;
-const LOOSE_VERSION_RE = /(?<![\d.])\d+\.\d+(?![\d.])/;
+//
+// The trailing `(?:[-.+][0-9A-Za-z._-]+)*` accepts build/qualifier tails in EITHER
+// semver form (`-`/`+`, e.g. `1.2.3-rc1`, `1.2.3+build.5`) OR the dot-separated form
+// some tools use (e.g. `git version 2.53.0.windows.1`). Without this, git's `.windows.1`
+// suffix made the whole match fail and the version fell back to `?`.
+const SEMVER_RE = /(?<![\d.])(\d+\.\d+\.\d+)(?:[-.+][0-9A-Za-z._-]+)*(?![\d.])/;
+const LOOSE_VERSION_RE = /(?<![\d.])(\d+\.\d+)(?:[-.+][0-9A-Za-z._-]+)*(?![\d.])/;
 
 /**
  * Pull a version out of a `--version` style output.
@@ -280,7 +285,7 @@ const LOOSE_VERSION_RE = /(?<![\d.])\d+\.\d+(?![\d.])/;
  * So: drop bracketed log lines, prefer the entry keyed by the tool's own name if
  * the output looks like a map, then prefer a full x.y.z over a loose x.y.
  */
-function extractVersion(out: string, binPath?: string): string | null {
+export function extractVersion(out: string, binPath?: string): string | null {
   const lines = out
     .split(/\r?\n/)
     .map((l) => l.trim())

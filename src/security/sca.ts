@@ -35,7 +35,7 @@ function getVersion(toolId: string): string | null {
   return m ? m[1] : null;
 }
 
-function toSeverity(s: string | undefined): "warn" | "error" {
+export function toSeverity(s: string | undefined): "warn" | "error" {
   const t = (s || "").toUpperCase();
   if (t === "CRITICAL" || t === "HIGH") return "error";
   return "warn";
