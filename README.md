@@ -47,6 +47,31 @@ devmap
 
 > Prefer **npm** — it ships the real bundle. The PyPI package is a thin wrapper that still requires Node at runtime.
 
+### Install from GitHub (for AI coding agents)
+
+devmap is also an [MCP](https://modelcontextprotocol.io) server, so Codex / CodeBuddy / WorkBuddy / VS Code / Claude Desktop / Cursor / Cline can pull it **straight from GitHub** — no global install needed:
+
+```bash
+# bun-based agents (CodeBuddy / WorkBuddy)
+bunx github:StevenLOL/devmap --mcp
+# node-only agents (Codex / Claude Desktop)
+npx github:StevenLOL/devmap --mcp
+# or the npm mirror published from this repo
+npx -y devmap --mcp
+```
+
+Drop the matching block into your agent's MCP config (full snippets + per-agent paths in [`docs/05_install_from_github.md`](./docs/05_install_from_github.md)):
+
+```jsonc
+{
+  "mcpServers": {
+    "devmap": { "command": "bunx", "args": ["github:StevenLOL/devmap", "--mcp"] }
+  }
+}
+```
+
+For CodeBuddy / WorkBuddy you can also install the `devmap` **skill** from this repo (`skill/devmap`) so the agent knows how to configure and call devmap. Details: [`docs/05_install_from_github.md`](./docs/05_install_from_github.md).
+
 ## Usage
 
 `devmap` **defaults to `scan`** — you can drop the `scan` word entirely. `devmap` and `devmap scan` are identical.

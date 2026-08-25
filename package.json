@@ -4,7 +4,19 @@
   "description": "A source-of-truth scanner and governance layer for your machine's development environment: one command maps the whole dev setup, draws the PATH-conflict graph, and surfaces ghost binaries and multi-version collisions.",
   "type": "module",
   "bin": {
-    "devmap": "src/index.ts"
+    "devmap": "bin/devmap.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE",
+    "docs",
+    "skill"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/StevenLOL/devmap.git"
   },
   "scripts": {
     "dev": "bun run src/index.ts",
