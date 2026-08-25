@@ -27,11 +27,12 @@ function register(d) {
   registry.push(d);
   return d;
 }
-async function runDetectors(ctx, progress) {
+async function runDetectors(ctx, progress, names) {
   const byName = {};
   const allChecks = [];
-  progress?.setTotal(registry.length);
-  await Promise.all(registry.map(async (d) => {
+  const selected = names ? registry.filter((d) => names.includes(d.name)) : registry;
+  progress?.setTotal(selected.length);
+  await Promise.all(selected.map(async (d) => {
     progress?.start(d.name);
     const t0 = Date.now();
     try {
@@ -1075,7 +1076,9 @@ function buildManifest(byName, conflicts, checks, environments, shells) {
     dockerInstalled: !!env.docker?.installed,
     wslDistros: env.wsl?.distros?.length || 0,
     vsShells: env.vsShells?.shells?.length || 0,
-    projectEnvs: env.projectEnvs?.envs?.length || 0
+    projectEnvs: env.projectEnvs?.envs?.length || 0,
+    mobileSdk: !!(env.sdks?.android || env.sdks?.flutter || env.sdks?.dart),
+    windowsPreflight: !!env.windows?.windows
   };
   return {
     meta: { tool: "devmap", version: VERSION, generatedAt: new Date().toISOString(), schema: "devmap.manifest/1.0", shells },
@@ -1084,6 +1087,8 @@ function buildManifest(byName, conflicts, checks, environments, shells) {
     packageManagers: pkg,
     ides,
     environments: env,
+    sdks: env.sdks || undefined,
+    windows: env.windows || undefined,
     checks,
     conflicts: {
       multiVersionTools: conflicts.multiVersionTools,
@@ -1275,27 +1280,32 @@ async function runScan(shells, disabled, opts = {}) {
     checkOutdated: opts.checkOutdated,
     wslDeep: opts.wslDeep,
     auditDeps: opts.auditDeps,
-    healthNetwork: opts.healthNetwork
+    healthNetwork: opts.healthNetwork,
+    fast: opts.fast
   };
-  const { byName, allChecks } = await runDetectors(ctx, progress);
+  const { byName, allChecks } = await runDetectors(ctx, progress, opts.fast ? ["runtimes", "packageManagers", "ides", "sdks", "windows"] : undefined);
   const groups = [
     ...byName.runtimes || [],
     ...byName.packageManagers || [],
     ...byName.ides || []
   ];
   const conflicts = computeConflicts(groups, shells, disabled);
-  const pythons = dedupePythons(byName.pip?.perInterpreter || []);
-  const condaEnvs = (byName.condaenv?.envs || []).map((e) => ({
-    name: e.name,
-    pythonPath: e.pythonPath
-  }));
-  const healthChecks = await computeHealth({ healthNetwork: opts.healthNetwork, pythons, condaEnvs });
-  const securityChecks = [
-    ...computeSecurity(byName),
-    ...computeScaInventory(),
-    ...opts.auditDeps ? runScaAudit(process.cwd()) : [],
-    ...opts.scanSecrets ? scanSecrets(opts.projectRoots) : []
-  ];
+  let healthChecks = [];
+  let securityChecks = [];
+  if (!opts.fast) {
+    const pythons = dedupePythons(byName.pip?.perInterpreter || []);
+    const condaEnvs = (byName.condaenv?.envs || []).map((e) => ({
+      name: e.name,
+      pythonPath: e.pythonPath
+    }));
+    healthChecks = await computeHealth({ healthNetwork: opts.healthNetwork, pythons, condaEnvs });
+    securityChecks = [
+      ...computeSecurity(byName),
+      ...computeScaInventory(),
+      ...opts.auditDeps ? runScaAudit(process.cwd()) : [],
+      ...opts.scanSecrets ? scanSecrets(opts.projectRoots) : []
+    ];
+  }
   const collected = [...allChecks, ...conflicts.checks, ...securityChecks, ...healthChecks].filter((c) => !isCheckDisabled(c.ID, disabled));
   const environments = {
     vcpkg: byName.vcpkg,
@@ -1305,7 +1315,9 @@ async function runScan(shells, disabled, opts = {}) {
     docker: byName.docker,
     wsl: byName.wsl,
     vsShells: byName.vsshells,
-    projectEnvs: byName.projects
+    projectEnvs: byName.projects,
+    sdks: byName.sdks,
+    windows: byName.windows
   };
   if (progress)
     progress.finish();
@@ -1386,6 +1398,49 @@ function parseDisable(v) {
     return new Set;
   return new Set(v.split(",").map((s) => s.trim()).filter(Boolean));
 }
+function targetToShells(target) {
+  if (typeof target === "string" && target) {
+    const t = target.toLowerCase();
+    if (t === "powershell")
+      return ["powershell"];
+    if (t === "cmd")
+      return ["current"];
+    if (t === "gitbash")
+      return ["gitbash"];
+    if (t === "wsl")
+      return ["wsl"];
+  }
+  return ["current"];
+}
+function buildPreflight(manifest) {
+  const win = manifest.windows || {};
+  const sdks = manifest.sdks || {};
+  const conflicts = manifest.conflicts || {};
+  const pathConflicts = conflicts.pathConflicts || [];
+  const checks = manifest.checks || [];
+  const blockers = checks.filter((c) => c.Severity === "error").map((c) => c.ID);
+  const warnings = checks.filter((c) => c.Severity === "warn").map((c) => c.ID);
+  return {
+    ok: blockers.length === 0,
+    blockers,
+    warnings,
+    executionPolicy: win.executionPolicy ?? null,
+    languageMode: win.languageMode ?? null,
+    codepage: win.codepage ?? null,
+    schannelRevoke: win.schannelRevokeCheck ?? null,
+    windows: {
+      present: !!win.windows,
+      appAliases: (win.appAliases || []).length,
+      safeDelete: !!win.safeDeleteActive
+    },
+    sdk: {
+      android: sdks.android ? { sdkHome: sdks.android.sdkHome, ndk: sdks.android.ndk || [], flutterChannel: sdks.flutter?.channel ?? null } : null,
+      flutter: sdks.flutter ? { version: sdks.flutter.version, channel: sdks.flutter.channel } : null,
+      dart: sdks.dart ? { version: sdks.dart.version } : null
+    },
+    pathConflicts: pathConflicts.length
+  };
+}
 var TOOLS = [
   {
     name: "scan_environment",
@@ -1433,6 +1488,23 @@ var TOOLS = [
         disable: { type: "string", description: "Check-rule prefixes to skip (see scan_environment)" }
       }
     }
+  },
+  {
+    name: "preflight",
+    description: "Agent pre-flight oracle: call this BEFORE running any shell command on the user's machine. " + "Returns a structured 'can this machine run my command cleanly right now' verdict -- Windows " + "constraints (execution policy, language mode, codepage, schannel revocation, app aliases, " + "safe-delete), mobile SDK state (Android/Flutter/Dart), and PATH conflict count. If 'blockers' " + "is non-empty the agent should fix (or ask the user to fix) those first, rather than discovering " + "failure mid-run (the gemini-cli #12519 'could not be parsed safely' class of failure).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: {
+          type: "string",
+          description: "Shell the agent intends to drive: powershell | cmd | gitbash | wsl (default current)"
+        },
+        forAgent: {
+          type: "boolean",
+          description: "When true, emphasise agent-relevant constraints (language mode, execution policy, codepage)"
+        }
+      }
+    }
   }
 ];
 async function callTool(name, args) {
@@ -1454,6 +1526,16 @@ async function callTool(name, args) {
       offPath: args.offPathOnly === true
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: false };
+  }
+  if (name === "preflight") {
+    const manifest = await runScan(targetToShells(args.target), parseDisable(args.disable), {
+      silent: true,
+      fast: true
+    });
+    return {
+      content: [{ type: "text", text: JSON.stringify(buildPreflight(manifest), null, 2) }],
+      isError: false
+    };
   }
   return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true };
 }
@@ -1607,6 +1689,52 @@ function diffManifests(a, b) {
     issuesResolved: issues.reduce((s, i) => s + i.resolved.length, 0)
   };
   return { tools: toolList, issues, summary };
+}
+
+// src/output/card.ts
+function windowsStatus(win) {
+  if (!win || !win.windows)
+    return { label: "n/a (not Windows)", level: "ok" };
+  if (win.languageMode && /constrained/i.test(String(win.languageMode)))
+    return { label: "BLOCK (Constrained Language Mode)", level: "block" };
+  const policyBlocked = Array.isArray(win.executionPolicy) ? win.executionPolicy.some((r) => /^(Restricted|AllSigned)$/i.test(r.level)) : false;
+  if (policyBlocked || win.schannelRevokeCheck === true || win.safeDeleteActive === true)
+    return { label: "WARN (policy / revocation / safe-delete)", level: "warn" };
+  return { label: "OK", level: "ok" };
+}
+function renderCard(m) {
+  const meta = m.meta || {};
+  const sys = m.system || {};
+  const sum = m.summary || {};
+  const env = m.environments || {};
+  const win = m.windows || {};
+  const sdks = m.sdks || {};
+  const conflicts = m.conflicts || {};
+  const ics = sum.issueCountBySeverity || {};
+  const secrets = (m.checks || []).filter((c) => c.Kind === "secret" && (c.Severity === "warn" || c.Severity === "error" || c.Severity === "missing")).length;
+  const ws = windowsStatus(win);
+  const lines = [];
+  lines.push(`# devmap ${meta.version || ""} - AI agent 的环境可靠性保险`);
+  lines.push("");
+  lines.push(`Host: ${sys.hostname || "?"}  ${sys.platform || "?"}/${sys.arch || "?"}  PATH dirs: ${sys.pathDirCount ?? "?"}`);
+  lines.push("");
+  lines.push(`- Tools: ${sum.totalInstallations ?? 0} across ${sum.runtimeKinds ?? 0} runtimes / ${sum.packageManagerKinds ?? 0} pkg-mgrs / ${sum.ideKinds ?? 0} IDEs`);
+  lines.push(`- Conflicts: PATH ${conflicts.pathConflicts?.length ?? 0} · multi-version ${sum.toolsWithMultipleVersions ?? 0} · ghost ${conflicts.ghostBinaries?.length ?? 0}`);
+  lines.push(`- Issues: ${ics.error ?? 0} error · ${ics.warn ?? 0} warn · ${ics.info ?? 0} info`);
+  lines.push(`- Windows pre-flight: ${ws.label}`);
+  const sdkBits = [];
+  if (sdks.android)
+    sdkBits.push(`Android ${sdks.android.sdkHome ? "home set" : "home MISSING"}${sdks.android.ndk?.length ? ` (NDK x${sdks.android.ndk.length})` : ""}`);
+  if (sdks.flutter)
+    sdkBits.push(`Flutter ${sdks.flutter.version || "?"}${sdks.flutter.channel ? "/" + sdks.flutter.channel : ""}`);
+  if (sdks.dart)
+    sdkBits.push(`Dart ${sdks.dart.version || "?"}`);
+  lines.push(`- Mobile SDK: ${sdkBits.length ? sdkBits.join(" · ") : "none detected"}`);
+  lines.push(`- Secrets: ${secrets} hit(s) (redacted)`);
+  lines.push("");
+  lines.push("Generated by `npx devmap` · github.com/StevenLOL/devmap");
+  return clean(lines.join(`
+`));
 }
 
 // src/detector/system.ts
@@ -2418,10 +2546,228 @@ register({
   }
 });
 
-// src/cli.ts
-import { writeFileSync, mkdirSync, readFileSync as readFileSync2, existsSync as existsSync7 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
+// src/detector/sdks.ts
+import { existsSync as existsSync7, readdirSync as readdirSync6 } from "node:fs";
 import { join as join8 } from "node:path";
+var realProbe = {
+  which: (n) => whichInDirs(n, pathDirs()),
+  run: (c, a) => runAsync(c, a, 12000),
+  env: (k) => process.env[k],
+  listDir: (d) => {
+    try {
+      return readdirSync6(d);
+    } catch {
+      return [];
+    }
+  },
+  exists: (p) => existsSync7(p)
+};
+var flutterCache = null;
+var FLUTTER_CACHE_TTL = 60 * 60 * 1000;
+async function detectSdks(plat = realProbe) {
+  const checks = [];
+  const data = {};
+  const androidHome = plat.env("ANDROID_HOME") || plat.env("ANDROID_SDK_ROOT") || null;
+  const sdkmanager = plat.which("sdkmanager");
+  const adb = plat.which("adb");
+  const hasAndroidTooling = adb.length > 0 || sdkmanager.length > 0;
+  if (androidHome && plat.exists(androidHome)) {
+    const ndkDir = join8(androidHome, "ndk");
+    const btDir = join8(androidHome, "build-tools");
+    const platDir = join8(androidHome, "platforms");
+    const ndk = plat.listDir(ndkDir).sort();
+    const buildTools = plat.listDir(btDir).sort();
+    const platforms = plat.listDir(platDir).sort();
+    let sdkVersion = null;
+    if (sdkmanager.length) {
+      const out = await plat.run(sdkmanager[0], ["--version"]);
+      sdkVersion = extractVersion(out) || (out.trim() || null);
+    }
+    data.android = { sdkHome: androidHome, sdkVersion, ndk, buildTools, platforms };
+    if (ndk.length > 1) {
+      checks.push(makeCheck("sdk.ndk.multi", "mismatch", "info", `Multiple NDK versions installed (${ndk.length})`, `NDK versions present: ${ndk.join(", ")} -- gradle may silently pick an unexpected one. Pin ndkVersion in app/build.gradle to avoid surprises.`, ndk.map((v) => join8(ndkDir, v))));
+    }
+  } else if (hasAndroidTooling) {
+    checks.push(makeCheck("sdk.android.home.missing", "missing", "warn", "Android tooling on PATH but ANDROID_HOME / ANDROID_SDK_ROOT is not set", `Found ${adb.length ? "adb" : ""}${adb.length && sdkmanager.length ? " + " : ""}${sdkmanager.length ? "sdkmanager" : ""} on PATH, but neither ANDROID_HOME nor ANDROID_SDK_ROOT is defined. Gradle / agents that resolve the SDK via the env var will fail to find it.`, [...adb, ...sdkmanager]));
+  }
+  if (adb.length) {
+    const out = await plat.run(adb[0], ["version"]);
+    data.adb = { version: extractVersion(out) };
+  }
+  const flutter = plat.which("flutter");
+  if (flutter.length) {
+    let version = null;
+    let channel = null;
+    let dartVersion = null;
+    if (plat === realProbe && flutterCache && Date.now() - flutterCache.ts < FLUTTER_CACHE_TTL) {
+      ({ version, channel, dartVersion } = flutterCache);
+    } else {
+      const out = await plat.run(flutter[0], ["--version"]);
+      version = extractVersion(out);
+      const chM = out.match(/channel\s+(\w+)/i);
+      channel = chM ? chM[1].toLowerCase() : null;
+      const dartM = out.match(/Dart\s+(\d+\.\d+\.\d+)/i) || out.match(/Dart SDK version:\s*(\d+\.\d+\.\d+)/i);
+      dartVersion = dartM ? dartM[1] : extractVersion(out.split(/Dart/i).pop() || "");
+      if (plat === realProbe)
+        flutterCache = { version, channel, dartVersion, ts: Date.now() };
+    }
+    data.flutter = { version, channel, dartVersion };
+    if (channel === "dev" || channel === "beta") {
+      checks.push(makeCheck("sdk.flutter.channel", "mismatch", "info", `Flutter is on the '${channel}' channel`, `Flutter channel '${channel}' is a moving target -- package resolution (pub get) and engine behavior can change without notice, which is a common source of agent/build breakage. Prefer 'stable' for reproducible CI.`, [flutter[0]]));
+    }
+  }
+  const dart = plat.which("dart");
+  if (dart.length && !data.flutter) {
+    const out = await plat.run(dart[0], ["--version"]);
+    data.dart = { version: extractVersion(out) };
+  }
+  return { data, checks };
+}
+register({
+  name: "sdks",
+  async scan() {
+    const { data, checks } = await detectSdks();
+    return { data, checks };
+  }
+});
+
+// src/detector/windows.ts
+import { readdirSync as readdirSync7, lstatSync as lstatSync2 } from "node:fs";
+import { join as join9 } from "node:path";
+var realProbe2 = {
+  isWin: IS_WIN,
+  execPolicy: () => run("powershell", ["-NoProfile", "-Command", "Get-ExecutionPolicy -List"]),
+  languageMode: () => {
+    const out = run("powershell", [
+      "-NoProfile",
+      "-Command",
+      "$ExecutionContext.SessionState.LanguageMode"
+    ]);
+    return out ? out.trim() : null;
+  },
+  codepage: () => {
+    const out = run("powershell", ["-NoProfile", "-Command", "[Console]::OutputEncoding.CodePage"]);
+    const n = parseInt((out || "").trim(), 10);
+    return Number.isFinite(n) ? n : null;
+  },
+  schannelRevokeEnabled: () => {
+    const url = "https://github.com";
+    const def = run("curl", ["-sS", "-o", "nul", "-w", "%{http_code}", "--max-time", "6", url]);
+    if (def && /^2|3/.test(def.trim()))
+      return false;
+    const bypass = run("curl", [
+      "-sS",
+      "-o",
+      "nul",
+      "-w",
+      "%{http_code}",
+      "--ssl-no-revoke",
+      "--max-time",
+      "6",
+      url
+    ]);
+    if (bypass && /^2|3/.test(bypass.trim()))
+      return true;
+    return null;
+  },
+  appAliases: () => {
+    const found = [];
+    if (!IS_WIN)
+      return found;
+    for (const dir of pathDirs()) {
+      if (!/[\\/]microsoft[\\/]windowsapps[\\/]?$/i.test(dir))
+        continue;
+      let entries;
+      try {
+        entries = readdirSync7(dir);
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        const full = join9(dir, e);
+        let st;
+        try {
+          st = lstatSync2(full);
+        } catch {
+          continue;
+        }
+        if (st.isSymbolicLink()) {
+          found.push({ tool: e, target: "WindowsApps (App Execution Alias)" });
+        }
+      }
+    }
+    return found;
+  },
+  safeDeleteActive: () => {
+    return !!process.env.CODEBUDDY_SAFE_DELETE_SANDBOX;
+  }
+};
+var offlineProbe = { ...realProbe2, schannelRevokeEnabled: () => null };
+function parseExecPolicy(out) {
+  const rows = [];
+  for (const raw of out.split(/\r?\n/)) {
+    const m = raw.trim().match(/^([A-Za-z]+)\s+(\S+)$/);
+    if (m && /policy/i.test(raw) === false && m[2] !== "Undefined") {
+      if (/scope/i.test(m[1]))
+        continue;
+      rows.push({ scope: m[1], level: m[2] });
+    }
+  }
+  return rows;
+}
+function detectWindows(plat = realProbe2) {
+  if (!plat.isWin)
+    return { data: { windows: false }, checks: [] };
+  const checks = [];
+  const data = { windows: true };
+  const epOut = plat.execPolicy();
+  const ep = parseExecPolicy(epOut);
+  data.executionPolicy = ep;
+  const EP_ORDER = ["MachinePolicy", "UserPolicy", "Process", "CurrentUser", "LocalMachine"];
+  const defined = EP_ORDER.map((s) => ep.find((r) => r.scope === s)).filter(Boolean);
+  const effective = defined.length ? defined[0].level : "Restricted";
+  if (/^(Restricted|AllSigned)$/i.test(effective)) {
+    checks.push(makeCheck("win.execpolicy", "mismatch", "warn", `PowerShell execution policy is '${effective}' (blocks script execution)`, `Agent-generated .ps1 scripts will be refused under policy '${effective}'. Set RemoteSigned (or Bypass for the agent session) so the agent can run commands.`, []));
+  }
+  const lm = plat.languageMode();
+  data.languageMode = lm;
+  if (lm && /constrained/i.test(lm)) {
+    checks.push(makeCheck("win.langmode", "mismatch", "error", "PowerShell is in Constrained Language Mode (agent commands will be rejected)", "Constrained Language Mode (often enforced via WDAC / AppLocker / Device Guard) strips cmdlets and .NET calls agents rely on. This is a hard blocker -- the agent cannot operate until the policy is relaxed for its session.", []));
+  }
+  const cp = plat.codepage();
+  data.codepage = cp;
+  if (cp !== null && cp !== 65001) {
+    checks.push(makeCheck("win.console.cp", "mismatch", "info", `Console code page is ${cp} (not UTF-8 65001)`, `Subprocess UTF-8 output will be decoded with the legacy code page (e.g. GBK) and mojibake. devmap emits ASCII-safe glyphs on Windows, but package managers / tool output may still corrupt. Run 'chcp 65001' or use Windows Terminal.`, []));
+  }
+  const revoke = plat.schannelRevokeEnabled();
+  data.schannelRevokeCheck = revoke;
+  if (revoke === true) {
+    checks.push(makeCheck("win.schannel", "mismatch", "warn", "Schannel certificate revocation check is blocking network fetches", "curl/pip/git report CRYPT_E_NO_REVOCATION_CHECK because the revocation server is unreachable. Pass --ssl-no-revoke to curl (and the equivalent to git/Invoke-WebRequest) or disable revocation check in schannel.", []));
+  }
+  const aliases = plat.appAliases();
+  data.appAliases = aliases;
+  if (aliases.length) {
+    checks.push(makeCheck("win.appalias", "mismatch", "info", `${aliases.length} App Execution Alias(es) shadow real tools on PATH`, `These resolve to the Microsoft Store stub rather than a real install: ${aliases.map((a) => a.tool).join(", ")}. If 'python'/'curl' behave oddly, disable the alias in Settings > Apps > Advanced app execution aliases.`, aliases.map((a) => a.tool)));
+  }
+  const sd = plat.safeDeleteActive();
+  data.safeDeleteActive = sd;
+  if (sd) {
+    checks.push(makeCheck("win.safedelete", "mismatch", "warn", "Safe-delete shim is active (deletions fail closed)", "A sandbox safe-delete shim intercepts removals and fails them closed. Agent cleanup steps (rm / shutil) will silently no-op -- temp artifacts accumulate and 'did it delete?' checks are misleading.", []));
+  }
+  return { data, checks };
+}
+register({
+  name: "windows",
+  async scan(ctx) {
+    const { data, checks } = detectWindows(ctx?.fast ? offlineProbe : realProbe2);
+    return { data, checks };
+  }
+});
+
+// src/cli.ts
+import { writeFileSync, mkdirSync, readFileSync as readFileSync2, existsSync as existsSync8 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join10 } from "node:path";
 import { execSync } from "node:child_process";
 if (process.platform === "win32") {
   try {
@@ -2435,7 +2781,7 @@ if (process.platform === "win32") {
   console.error = (...a) => oerr(...a.map((x) => typeof x === "string" ? clean(x) : x));
 }
 var ALL_SHELLS2 = ["current", "powershell", "gitbash", "wsl"];
-var DEFAULT_MANIFEST = join8(homedir3(), ".devmap", "devmap.json");
+var DEFAULT_MANIFEST = join10(homedir3(), ".devmap", "devmap.json");
 function emitText(text, withBom = false) {
   const prefix = withBom && !process.stdout.isTTY ? "\uFEFF" : "";
   process.stdout.write(prefix + text + `
@@ -2484,7 +2830,7 @@ function toRoots(v) {
   return arr.length ? arr : undefined;
 }
 function readManifestFile(path) {
-  if (!existsSync7(path))
+  if (!existsSync8(path))
     throw new Error(`manifest file not found: ${path}`);
   try {
     const raw = readFileSync2(path, "utf8").replace(/^\uFEFF/, "");
@@ -2496,7 +2842,7 @@ function readManifestFile(path) {
 async function resolveManifest(explicitPath, shells, disabled, label, roots) {
   if (explicitPath)
     return { manifest: readManifestFile(explicitPath), source: explicitPath };
-  if (existsSync7(DEFAULT_MANIFEST))
+  if (existsSync8(DEFAULT_MANIFEST))
     return { manifest: readManifestFile(DEFAULT_MANIFEST), source: DEFAULT_MANIFEST };
   const manifest = await runScan(shells, disabled, { projectRoots: roots });
   return { manifest, source: label + "(live scan)" };
@@ -2514,6 +2860,29 @@ async function cmdScan(opts, pos) {
     healthNetwork: opts["health-network"] === true,
     scanSecrets: opts["scan-secrets"] === true
   });
+  if (opts.card || opts.share) {
+    const card = renderCard(manifest);
+    if (opts.share) {
+      const out = join10(process.cwd(), "devmap-card.md");
+      try {
+        writeFileSync(out, card + `
+`);
+        console.log(`  card -> ${out}`);
+      } catch {
+        console.log(card);
+      }
+    } else {
+      console.log(card);
+    }
+    if (opts["no-manifest"] !== true) {
+      try {
+        mkdirSync(join10(DEFAULT_MANIFEST, ".."), { recursive: true });
+        writeFileSync(DEFAULT_MANIFEST, JSON.stringify(manifest, null, 2));
+        console.log(`  ${"\x1B[2m"}manifest -> ${DEFAULT_MANIFEST}\x1B[0m`);
+      } catch {}
+    }
+    return 0;
+  }
   if (opts.json) {
     emitText(JSON.stringify(manifest, null, 2), opts.bom === true);
   } else if (opts.report) {
@@ -2522,7 +2891,7 @@ async function cmdScan(opts, pos) {
     renderPrettyFromManifest(manifest);
     if (opts["no-manifest"] !== true) {
       try {
-        mkdirSync(join8(DEFAULT_MANIFEST, ".."), { recursive: true });
+        mkdirSync(join10(DEFAULT_MANIFEST, ".."), { recursive: true });
         writeFileSync(DEFAULT_MANIFEST, JSON.stringify(manifest, null, 2));
         console.log(`  ${"\x1B[2m"}manifest → ${DEFAULT_MANIFEST}${"\x1B[0m"}`);
       } catch {}
@@ -2801,6 +3170,38 @@ function renderEnvironments(env) {
     for (const e of env.projectEnvs.envs.slice(0, 12))
       console.log(`    ${e.project}  \x1B[2m${e.type}\x1B[0m  ${e.path}`);
   }
+  if (env.sdks) {
+    console.log(rule);
+    console.log(`  \x1B[1mmobile SDKs\x1B[0m`);
+    const s = env.sdks;
+    if (s.android) {
+      const a = s.android;
+      console.log(`    Android SDK  home=${a.sdkHome || "(unset)"}  ndk=${a.ndk?.length || 0}  build-tools=${a.buildTools?.length || 0}  platforms=${a.platforms?.length || 0}`);
+    }
+    if (s.flutter)
+      console.log(`    Flutter ${s.flutter.version || "?"}${s.flutter.channel ? " (" + s.flutter.channel + ")" : ""}${s.flutter.dartVersion ? "  dart " + s.flutter.dartVersion : ""}`);
+    if (s.dart)
+      console.log(`    Dart ${s.dart.version || "?"}`);
+    if (!s.android && !s.flutter && !s.dart)
+      console.log(`    (none detected)`);
+  }
+  if (env.windows?.windows) {
+    console.log(rule);
+    console.log(`  \x1B[1mWindows pre-flight\x1B[0m`);
+    const w = env.windows;
+    if (w.languageMode)
+      console.log(`    language mode: ${w.languageMode}`);
+    if (w.executionPolicy?.length)
+      console.log(`    exec policy: ${w.executionPolicy.map((r) => r.scope + "=" + r.level).join(", ")}`);
+    if (w.codepage != null)
+      console.log(`    codepage: ${w.codepage}`);
+    if (w.schannelRevokeCheck != null)
+      console.log(`    schannel revocation check: ${w.schannelRevokeCheck ? "ON (blocks fetches)" : "off"}`);
+    if (w.appAliases?.length)
+      console.log(`    app aliases: ${w.appAliases.map((a) => a.tool).join(", ")}`);
+    if (w.safeDeleteActive)
+      console.log(`    safe-delete shim: ACTIVE (deletes fail closed)`);
+  }
 }
 function renderMarkdownLite(m) {
   const lines = [`# devmap report`, "", `> host: ${m.system?.hostname} · ${m.system?.platform}/${m.system?.arch} · pathDirs=${m.system?.pathDirCount}`, ""];
@@ -2852,6 +3253,20 @@ function renderMarkdownLite(m) {
     envLines.push(`- Visual Studio dev shells: ${env.vsShells.shells.length}`);
   if (env.projectEnvs?.envs?.length)
     envLines.push(`- project-local environments: ${env.projectEnvs.envs.length}`);
+  if (env.sdks) {
+    const s = env.sdks;
+    const bits = [];
+    if (s.android)
+      bits.push(`Android home=${s.android.sdkHome || "(unset)"}, ndk=${s.android.ndk?.length || 0}`);
+    if (s.flutter)
+      bits.push(`Flutter ${s.flutter.version || "?"}${s.flutter.channel ? "/" + s.flutter.channel : ""}`);
+    if (s.dart)
+      bits.push(`Dart ${s.dart.version || "?"}`);
+    if (bits.length)
+      envLines.push(`- mobile SDKs: ${bits.join("; ")}`);
+  }
+  if (env.windows?.windows)
+    envLines.push(`- Windows pre-flight: langmode=${env.windows.languageMode || "?"}, codepage=${env.windows.codepage ?? "?"}, safeDelete=${!!env.windows.safeDeleteActive}`);
   if (envLines.length) {
     lines.push("", `## environments (Phase 2)`);
     lines.push(...envLines);
@@ -2872,6 +3287,8 @@ Usage:
 scan options:
   --json            emit machine-readable JSON (devmap.json schema)
   --report          emit full markdown report
+  --card            print a screenshot-friendly share card (pure ASCII/Markdown)
+  --share           write the share card to ./devmap-card.md (and print the path)
   --no-manifest     do not persist the manifest to disk
   --manifest <p>    specify the manifest location (default ~/.devmap/devmap.json)
   --disable <r1,r2> disable check rules (prefix match, e.g. path.duplicate / pip.outdated)

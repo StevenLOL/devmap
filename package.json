@@ -1,6 +1,6 @@
 {
   "name": "devmap",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "description": "A source-of-truth scanner and governance layer for your machine's development environment: one command maps the whole dev setup, draws the PATH-conflict graph, and surfaces ghost binaries and multi-version collisions.",
   "type": "module",
   "bin": {
@@ -24,7 +24,15 @@
     "build": "bun build --compile --minify src/index.ts --outfile dist/devmap",
     "test": "bun test"
   },
-  "keywords": ["dev-environment", "scanner", "fastfetch", "path-conflict", "ghost-binary", "mcp", "source-of-truth"],
+  "keywords": [
+    "dev-environment",
+    "scanner",
+    "fastfetch",
+    "path-conflict",
+    "ghost-binary",
+    "mcp",
+    "source-of-truth"
+  ],
   "license": "MIT",
   "private": false
 }
