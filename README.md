@@ -1,17 +1,25 @@
 # devmap
 
-> A source-of-truth scanner and governance layer for your machine's development environment. One command maps the whole dev setup, draws the PATH-conflict graph, and surfaces ghost binaries and multi-version collisions.
+> **The environment-reliability insurance for AI agents.** Before an agent changes *your* machine, let it ask devmap one question: *"can this environment run my command cleanly right now?"* — and get a structured answer instead of a mid-run failure.
 
-`devmap` is the developer-focused spiritual successor to `fastfetch`: instead of only printing system specs, it scans the *development* surface of your machine — runtimes, package managers, IDEs, per-interpreter pip packages, conda/WSL/Docker environments, Visual Studio dev shells, and project-local virtual environments — and produces a single machine-readable manifest plus an actionable issue list.
+`devmap` is the developer-focused spiritual successor to `fastfetch`: instead of only printing system specs, it scans the *development* surface of your machine — runtimes, package managers, IDEs, per-interpreter pip packages, conda/WSL/Docker environments, Visual Studio dev shells, project-local virtual environments, **mobile SDKs (Android / Flutter / Dart / NDK)**, and the **Windows pre-flight** state an AI agent dies on — and produces a single machine-readable manifest plus an actionable issue list. As an MCP server it plugs straight into Cursor / Cline / Claude Desktop / Codex / CodeBuddy / WorkBuddy, so the agent calls `preflight` *before* it ever shells out a command.
+
+## Why devmap (and why it is built for agents)
+
+- **AI agents break on dirty environments, not on missing specs.** An agent that shells out a `flutter build` or `pip install` on a machine with a Constrained-Language-Mode PowerShell, a Restricted execution policy, a GBK codepage, or an unset `ANDROID_HOME` fails mid-run (the `gemini-cli #12519` "could not be parsed safely" class of failure). `devmap --mcp` exposes a **`preflight`** tool the agent calls *first* — it returns `ok / blockers / warnings` plus the exact Windows and mobile-SDK constraints, so the agent fixes (or asks the user to fix) them up front.
+- **The agent stays in control.** devmap is a read-only oracle. It never modifies your environment — it reports, and the agent decides. No hidden mutations, no "helpful" auto-fixes.
 
 ## Features
 
-- **One-command full scan** of the dev environment (runtimes, package managers, IDEs, and the Phase 2 environment layers below).
-- **PATH conflict graph**: detects multi-version tools, shadowed binaries, and ghost/broken symlinks (e.g. Windows App Execution Aliases that look broken but aren't).
+- **One-command full scan** of the dev environment (runtimes, package managers, IDEs, environment layers, mobile SDKs, and Windows pre-flight).
+- **PATH conflict graph**: detects multi-version tools, shadowed binaries, and ghost/broken symlinks (e.g. Windows App Execution Aliases that look broken but aren't). This is devmap's original wedge — **14 source-available rivals all lack it**.
 - **Off-PATH awareness**: reports installed-but-not-on-PATH tools, while correctly treating version-manager environments (conda envs, nvm versions) as by-design off-PATH.
+- **Mobile SDK moat (exclusive)**: Android SDK (`ANDROID_HOME`/`sdkmanager`/`adb`), Flutter (version + channel + bundled Dart), standalone Dart, and NDK — flags `ANDROID_HOME` unset while tools are on PATH, dev/beta Flutter channels, and multiple NDK versions silently shadowing each other. No competitor scans this.
+- **Windows pre-flight moat (exclusive)**: six checks an agent dies on — PowerShell execution policy, Constrained Language Mode (error), console code page, schannel cert-revocation (curl `CRYPT_E_NO_REVOCATION_CHECK`), App Execution Aliases shadowing real `python`/`curl`, and the safe-delete shim that makes deletions fail closed.
 - **Phase 2 environment layers**: vcpkg packages, per-python pip packages (incl. upgradable), apt packages (Linux), conda environments, Docker (binary + daemon + images/containers), WSL distros, Visual Studio dev shells, and project-local environments (`.venv`, `node_modules`).
 - **Three sub-commands**: `scan` (the fact source), `query` (ask the manifest), `devdiff` (compare two manifests — environment drift / cross-machine consistency).
 - **Health layer (P1)**: converges official self-checks into one view, **per environment**. Offline by default: `pip check` runs for **every** Python interpreter, and `conda doctor` runs for **every** conda env. With `--health-network`, `npm doctor` / `rustup check` are added. Missing/offline probes degrade gracefully to `info` (skipped). Passing checks are summarized as `✓ N checks passed` — only `warn`/`error` surface under `issues (N)`.
+- **Share card**: `devmap --card` prints a screenshot-friendly ASCII/Markdown card (tool count, conflicts, issues, Windows pre-flight status, mobile SDK state) — the zero-cost growth flywheel. `devmap --share` writes it to `./devmap-card.md`.
 - **Zero external dependencies.** Pure TypeScript + [Bun](https://bun.sh). No `npm install` required.
 
 ## Requirements
@@ -99,6 +107,8 @@ devmap --scan-root C:\src       # also scan project-local envs under a root (com
 devmap --wsl-deep               # also wake stopped WSL distros and probe their tools (slower)
 devmap --outdated               # hit PyPI to list upgradable pip/conda packages (slower, needs network)
 devmap --ci                     # exit code 1 if any error-severity issue is found
+devmap --card                  # print a screenshot-friendly share card
+devmap --share                 # write the share card to ./devmap-card.md
 ```
 
 Key `scan` flags:
@@ -107,6 +117,8 @@ Key `scan` flags:
 |------|-------------|
 | `--json` | Emit machine-readable JSON (the `devmap.json` schema) to stdout. |
 | `--report` | Emit a full markdown report. |
+| `--card` | Print a screenshot-friendly share card (pure ASCII/Markdown — never mojibakes on GBK consoles). |
+| `--share` | Write the share card to `./devmap-card.md` (and print the path). |
 | `--no-manifest` | Do not persist the manifest to disk. |
 | `--manifest <path>` | Read/write the manifest at a custom path (default `~/.devmap/devmap.json`). |
 | `--disable <r1,r2>` | Disable check rules by ID prefix (e.g. `path.duplicate`, `pip.outdated`). |
@@ -119,6 +131,19 @@ Key `scan` flags:
 | `--bom` | Prefix output with a UTF-8 BOM so Notepad-like viewers render it correctly (stdout redirect/pipe only). |
 | `--audit-deps` | Invoke installed SCA tools (OSV-Scanner/pip-audit/govulncheck/Trivy) and merge CVE findings into the report (opt-in, uses network). |
 | `--health-network` | Also run network health probes (`npm doctor` / `rustup check`); off by default to keep scans offline-fast. |
+
+### `preflight` — the agent's first call (via MCP)
+
+When running as an MCP server (`devmap --mcp`), agents get three tools: `scan_environment`, `query_tool`, and **`preflight`**. Call `preflight` *before* any shell command:
+
+```jsonc
+// agent -> devmap (MCP)
+{ "tool": "preflight", "arguments": { "target": "powershell", "forAgent": true } }
+// -> { "ok": false, "blockers": ["win.langmode"], "warnings": ["win.execpolicy", "win.schannel"],
+//      "languageMode": "ConstrainedLanguage", "codepage": 936, "schannelRevoke": true, ... }
+```
+
+`blockers` non-empty ⇒ fix first. `ok: true` ⇒ the agent can proceed. This is the concrete realization of devmap's thesis: *be the neutral environment oracle an agent consults before it touches your machine.*
 
 ### `query` — ask the manifest
 

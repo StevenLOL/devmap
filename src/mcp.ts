@@ -24,6 +24,52 @@ function parseDisable(v: unknown): Set<string> {
   return new Set(v.split(",").map((s) => s.trim()).filter(Boolean));
 }
 
+// Map a preflight `target` to the shell view the scan should reconstruct.
+function targetToShells(target: unknown): ShellId[] {
+  if (typeof target === "string" && target) {
+    const t = target.toLowerCase();
+    if (t === "powershell") return ["powershell"];
+    if (t === "cmd") return ["current"];
+    if (t === "gitbash") return ["gitbash"];
+    if (t === "wsl") return ["wsl"];
+  }
+  return ["current"];
+}
+
+// Build the agent-facing pre-flight verdict from a full manifest. Reuses the scan output -- no new
+// probing logic (the Windows / SDK detectors already produced the relevant checks & data).
+function buildPreflight(manifest: any): any {
+  const win = manifest.windows || {};
+  const sdks = manifest.sdks || {};
+  const conflicts = manifest.conflicts || {};
+  const pathConflicts: any[] = conflicts.pathConflicts || [];
+  const checks: any[] = manifest.checks || [];
+  const blockers = checks.filter((c: any) => c.Severity === "error").map((c: any) => c.ID);
+  const warnings = checks.filter((c: any) => c.Severity === "warn").map((c: any) => c.ID);
+  return {
+    ok: blockers.length === 0,
+    blockers,
+    warnings,
+    executionPolicy: win.executionPolicy ?? null,
+    languageMode: win.languageMode ?? null,
+    codepage: win.codepage ?? null,
+    schannelRevoke: win.schannelRevokeCheck ?? null,
+    windows: {
+      present: !!win.windows,
+      appAliases: (win.appAliases || []).length,
+      safeDelete: !!win.safeDeleteActive,
+    },
+    sdk: {
+      android: sdks.android
+        ? { sdkHome: sdks.android.sdkHome, ndk: sdks.android.ndk || [], flutterChannel: sdks.flutter?.channel ?? null }
+        : null,
+      flutter: sdks.flutter ? { version: sdks.flutter.version, channel: sdks.flutter.channel } : null,
+      dart: sdks.dart ? { version: sdks.dart.version } : null,
+    },
+    pathConflicts: pathConflicts.length,
+  };
+}
+
 // Tool catalogue exposed to agents. Keep this the single source of truth for the adapter surface.
 const TOOLS = [
   {
@@ -79,6 +125,29 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: "preflight",
+    description:
+      "Agent pre-flight oracle: call this BEFORE running any shell command on the user's machine. " +
+      "Returns a structured 'can this machine run my command cleanly right now' verdict -- Windows " +
+      "constraints (execution policy, language mode, codepage, schannel revocation, app aliases, " +
+      "safe-delete), mobile SDK state (Android/Flutter/Dart), and PATH conflict count. If 'blockers' " +
+      "is non-empty the agent should fix (or ask the user to fix) those first, rather than discovering " +
+      "failure mid-run (the gemini-cli #12519 'could not be parsed safely' class of failure).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: {
+          type: "string",
+          description: "Shell the agent intends to drive: powershell | cmd | gitbash | wsl (default current)",
+        },
+        forAgent: {
+          type: "boolean",
+          description: "When true, emphasise agent-relevant constraints (language mode, execution policy, codepage)",
+        },
+      },
+    },
+  },
 ] as const;
 
 type ToolCallResult = { content: { type: "text"; text: string }[]; isError: boolean };
@@ -102,6 +171,17 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<To
       offPath: args.offPathOnly === true,
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: false };
+  }
+  if (name === "preflight") {
+    // Fast path: moat + conflict detectors only (~seconds), skipping the slow health/security layers.
+    const manifest = await runScan(targetToShells(args.target), parseDisable(args.disable), {
+      silent: true,
+      fast: true,
+    });
+    return {
+      content: [{ type: "text", text: JSON.stringify(buildPreflight(manifest), null, 2) }],
+      isError: false,
+    };
   }
   return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true };
 }

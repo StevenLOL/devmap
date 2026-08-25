@@ -9,6 +9,7 @@ export interface ScanContext {
   progress?: ScanProgress; // scan progress feedback (written to stderr, see progress.ts)
   checkOutdated?: boolean; // query the network for upgradable pip/conda packages (default false, keeps the scan fast)
   wslDeep?: boolean; // wake stopped WSL distros to probe their internal tools (default false)
+  fast?: boolean; // fast pre-flight mode (MCP `preflight`): detectors should skip slow/network probes
 }
 
 export interface Detector {
@@ -37,13 +38,15 @@ export function register(d: Detector): Detector {
 export async function runDetectors(
   ctx: ScanContext,
   progress?: ScanProgress,
+  names?: string[],
 ): Promise<{ byName: Record<string, any>; allChecks: any[] }> {
   const byName: Record<string, any> = {};
   const allChecks: any[] = [];
-  progress?.setTotal(registry.length);
+  const selected = names ? registry.filter((d) => names.includes(d.name)) : registry;
+  progress?.setTotal(selected.length);
 
   await Promise.all(
-    registry.map(async (d) => {
+    selected.map(async (d) => {
       progress?.start(d.name);
       const t0 = Date.now();
       try {

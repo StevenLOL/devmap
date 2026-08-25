@@ -114,4 +114,8 @@ export interface Environments {
   wsl?: WslInfo;
   vsShells?: { shells: VsShellInfo[] };
   projectEnvs?: { roots: string[]; envs: ProjectEnvInfo[] };
+  // Moat layer (optimization doc §2.A/§2.B): mobile SDKs + Windows pre-flight. Typed loosely because
+  // the detector owns the concrete shape; the manifest schema treats them as opaque data blobs.
+  sdks?: any;
+  windows?: any;
 }

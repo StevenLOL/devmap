@@ -35,6 +35,8 @@ export function buildManifest(
     wslDistros: env.wsl?.distros?.length || 0,
     vsShells: env.vsShells?.shells?.length || 0,
     projectEnvs: env.projectEnvs?.envs?.length || 0,
+    mobileSdk: !!(env.sdks?.android || env.sdks?.flutter || env.sdks?.dart),
+    windowsPreflight: !!env.windows?.windows,
   };
 
   return {
@@ -44,6 +46,8 @@ export function buildManifest(
     packageManagers: pkg,
     ides,
     environments: env,
+    sdks: env.sdks || undefined,
+    windows: env.windows || undefined,
     checks,
     conflicts: {
       multiVersionTools: conflicts.multiVersionTools,

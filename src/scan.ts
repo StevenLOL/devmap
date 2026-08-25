@@ -19,6 +19,7 @@ export interface ScanOpts {
   auditDeps?: boolean; // opt-in dependency CVE audit via installed SCA tools (--audit-deps; uses network)
   healthNetwork?: boolean; // opt-in network health probes (--health-network; npm doctor / rustup check need network)
   scanSecrets?: boolean; // opt-in hardcoded-secret scan (--scan-secrets; offline, curated files only)
+  fast?: boolean; // fast pre-flight path (MCP `preflight`): moat + conflict detectors only, no health/security layers
 }
 
 /**
@@ -78,8 +79,16 @@ export async function runScan(shells: ShellId[], disabled: Set<string>, opts: Sc
     wslDeep: opts.wslDeep,
     auditDeps: opts.auditDeps,
     healthNetwork: opts.healthNetwork,
+    fast: opts.fast,
   };
-  const { byName, allChecks } = await runDetectors(ctx, progress);
+  const { byName, allChecks } = await runDetectors(
+    ctx,
+    progress,
+    // Fast path (MCP `preflight`): only the moat (sdks/windows) + conflict-relevant (runtimes/pkg/ides)
+    // detectors run. This skips the slow health/security layers and turns a ~75s full scan into a
+    // few-second pre-flight oracle -- agents call this on every turn, so latency matters.
+    opts.fast ? ["runtimes", "packageManagers", "ides", "sdks", "windows"] : undefined,
+  );
   const groups: ToolGroup[] = [
     ...(byName.runtimes || []),
     ...(byName.packageManagers || []),
@@ -87,30 +96,35 @@ export async function runScan(shells: ShellId[], disabled: Set<string>, opts: Sc
   ];
   const conflicts = computeConflicts(groups, shells, disabled);
 
-  // Health layer (P1): aggregate official doctor / self-check commands.
-  //   - offline probe (pip check) runs by default;
-  //   - network probes (npm doctor / rustup check) only when opts.healthNetwork (they need network).
-  // Each probe is timeout-isolated via runAsync; missing/unavailable probes degrade to info.
-  // Health layer (P1): per-interpreter pip check + per-env conda doctor (offline, default on),
-  // plus npm doctor / rustup check when opts.healthNetwork. We feed the interpreters/envs devmap
-  // already discovered so the health layer checks EVERY environment, not just the PATH-first tool.
-  const pythons: HealthPython[] = dedupePythons((byName.pip?.perInterpreter as { pythonPath: string }[]) || []);
-  const condaEnvs: HealthCondaEnv[] = ((byName.condaenv?.envs as HealthCondaEnv[]) || []).map((e) => ({
-    name: e.name,
-    pythonPath: e.pythonPath,
-  }));
-  const healthChecks: Check[] = await computeHealth({ healthNetwork: opts.healthNetwork, pythons, condaEnvs });
+  // Health + Security layers (P1) are the slow part of a full scan (per-interpreter pip check ~30s,
+  // conda doctor, EOL lookups). They are irrelevant to the pre-flight verdict, so skip them in fast mode.
+  let healthChecks: Check[] = [];
+  let securityChecks: Check[] = [];
+  if (!opts.fast) {
+    // Health layer: aggregate official doctor / self-check commands.
+    //   - offline probe (pip check) runs by default;
+    //   - network probes (npm doctor / rustup check) only when opts.healthNetwork (they need network).
+    // Each probe is timeout-isolated via runAsync; missing/unavailable probes degrade to info.
+    // We feed the interpreters/envs devmap already discovered so the health layer checks EVERY
+    // environment, not just the PATH-first tool.
+    const pythons: HealthPython[] = dedupePythons((byName.pip?.perInterpreter as { pythonPath: string }[]) || []);
+    const condaEnvs: HealthCondaEnv[] = ((byName.condaenv?.envs as HealthCondaEnv[]) || []).map((e) => ({
+      name: e.name,
+      pythonPath: e.pythonPath,
+    }));
+    healthChecks = await computeHealth({ healthNetwork: opts.healthNetwork, pythons, condaEnvs });
 
-  // Security layer (P1):
-  //   - computeSecurity: OFFLINE runtime EOL, read from already-detected runtime versions (default on).
-  //   - computeScaInventory: OFFLINE inventory of installed SCA tools (default on, info checks).
-  //   - runScaAudit: OPT-IN dependency CVE audit via installed SCA tools (--audit-deps), uses network.
-  const securityChecks: Check[] = [
-    ...computeSecurity(byName),
-    ...computeScaInventory(),
-    ...(opts.auditDeps ? runScaAudit(process.cwd()) : []),
-    ...(opts.scanSecrets ? scanSecrets(opts.projectRoots) : []),
-  ];
+    // Security layer:
+    //   - computeSecurity: OFFLINE runtime EOL, read from already-detected runtime versions (default on).
+    //   - computeScaInventory: OFFLINE inventory of installed SCA tools (default on, info checks).
+    //   - runScaAudit: OPT-IN dependency CVE audit via installed SCA tools (--audit-deps), uses network.
+    securityChecks = [
+      ...computeSecurity(byName),
+      ...computeScaInventory(),
+      ...(opts.auditDeps ? runScaAudit(process.cwd()) : []),
+      ...(opts.scanSecrets ? scanSecrets(opts.projectRoots) : []),
+    ];
+  }
 
   // Aggregate checks from all detectors (environment layer + conflict layer + security layer),
   // apply --disable filtering uniformly (e.g. `--disable security` turns the whole security layer off).
@@ -126,6 +140,9 @@ export async function runScan(shells: ShellId[], disabled: Set<string>, opts: Sc
     wsl: byName.wsl,
     vsShells: byName.vsshells,
     projectEnvs: byName.projects,
+    // Moat layer: mobile SDKs + Windows pre-flight (optimization doc §2.A/§2.B).
+    sdks: byName.sdks,
+    windows: byName.windows,
   };
 
   if (progress) progress.finish();

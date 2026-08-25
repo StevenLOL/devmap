@@ -8,6 +8,7 @@ import { runScan } from "./scan";
 import { queryManifest } from "./query";
 import { diffManifests } from "./diff";
 import { clean } from "./glyphs";
+import { renderCard } from "./output/card";
 import "./detector/system";
 import "./detector/runtimes";
 import "./detector/pkgmgrs";
@@ -20,6 +21,8 @@ import "./detector/docker";
 import "./detector/wsl";
 import "./detector/vsshells";
 import "./detector/projects";
+import "./detector/sdks";
+import "./detector/windows";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -147,6 +150,31 @@ async function cmdScan(opts: Record<string, string | boolean>, pos: string[]): P
     healthNetwork: opts["health-network"] === true,
     scanSecrets: opts["scan-secrets"] === true,
   });
+
+  if (opts.card || opts.share) {
+    const card = renderCard(manifest);
+    if (opts.share) {
+      const out = join(process.cwd(), "devmap-card.md");
+      try {
+        writeFileSync(out, card + "\n");
+        console.log(`  card -> ${out}`);
+      } catch {
+        console.log(card);
+      }
+    } else {
+      console.log(card);
+    }
+    if (opts["no-manifest"] !== true) {
+      try {
+        mkdirSync(join(DEFAULT_MANIFEST, ".."), { recursive: true });
+        writeFileSync(DEFAULT_MANIFEST, JSON.stringify(manifest, null, 2));
+        console.log(`  ${"\x1b[2m"}manifest -> ${DEFAULT_MANIFEST}\x1b[0m`);
+      } catch {
+        /* disk write failure does not abort */
+      }
+    }
+    return 0;
+  }
 
   if (opts.json) {
     emitText(JSON.stringify(manifest, null, 2), opts.bom === true);
@@ -471,6 +499,37 @@ function renderEnvironments(env: any): void {
     console.log(`  \x1b[1mproject-local environments\x1b[0m  (${env.projectEnvs.envs.length})`);
     for (const e of env.projectEnvs.envs.slice(0, 12)) console.log(`    ${e.project}  \x1b[2m${e.type}\x1b[0m  ${e.path}`);
   }
+
+  // Moat layer (optimization doc §2.A/§2.B): mobile SDKs + Windows pre-flight
+  if (env.sdks) {
+    console.log(rule);
+    console.log(`  \x1b[1mmobile SDKs\x1b[0m`);
+    const s = env.sdks;
+    if (s.android) {
+      const a = s.android;
+      console.log(
+        `    Android SDK  home=${a.sdkHome || "(unset)"}  ndk=${a.ndk?.length || 0}  build-tools=${a.buildTools?.length || 0}  platforms=${a.platforms?.length || 0}`,
+      );
+    }
+    if (s.flutter)
+      console.log(`    Flutter ${s.flutter.version || "?"}${s.flutter.channel ? " (" + s.flutter.channel + ")" : ""}${s.flutter.dartVersion ? "  dart " + s.flutter.dartVersion : ""}`);
+    if (s.dart) console.log(`    Dart ${s.dart.version || "?"}`);
+    if (!s.android && !s.flutter && !s.dart) console.log(`    (none detected)`);
+  }
+
+  if (env.windows?.windows) {
+    console.log(rule);
+    console.log(`  \x1b[1mWindows pre-flight\x1b[0m`);
+    const w = env.windows;
+    if (w.languageMode) console.log(`    language mode: ${w.languageMode}`);
+    if (w.executionPolicy?.length)
+      console.log(`    exec policy: ${w.executionPolicy.map((r: any) => r.scope + "=" + r.level).join(", ")}`);
+    if (w.codepage != null) console.log(`    codepage: ${w.codepage}`);
+    if (w.schannelRevokeCheck != null)
+      console.log(`    schannel revocation check: ${w.schannelRevokeCheck ? "ON (blocks fetches)" : "off"}`);
+    if (w.appAliases?.length) console.log(`    app aliases: ${w.appAliases.map((a: any) => a.tool).join(", ")}`);
+    if (w.safeDeleteActive) console.log(`    safe-delete shim: ACTIVE (deletes fail closed)`);
+  }
 }
 
 // report mode degraded rendering (simplified markdown, reuses the manifest)
@@ -516,6 +575,16 @@ function renderMarkdownLite(m: any): string {
   if (env.wsl?.available) envLines.push(`- WSL: ${plur(env.wsl.distros?.length || 0, "distro")}`);
   if (env.vsShells?.shells?.length) envLines.push(`- Visual Studio dev shells: ${env.vsShells.shells.length}`);
   if (env.projectEnvs?.envs?.length) envLines.push(`- project-local environments: ${env.projectEnvs.envs.length}`);
+  if (env.sdks) {
+    const s = env.sdks;
+    const bits: string[] = [];
+    if (s.android) bits.push(`Android home=${s.android.sdkHome || "(unset)"}, ndk=${s.android.ndk?.length || 0}`);
+    if (s.flutter) bits.push(`Flutter ${s.flutter.version || "?"}${s.flutter.channel ? "/" + s.flutter.channel : ""}`);
+    if (s.dart) bits.push(`Dart ${s.dart.version || "?"}`);
+    if (bits.length) envLines.push(`- mobile SDKs: ${bits.join("; ")}`);
+  }
+  if (env.windows?.windows)
+    envLines.push(`- Windows pre-flight: langmode=${env.windows.languageMode || "?"}, codepage=${env.windows.codepage ?? "?"}, safeDelete=${!!env.windows.safeDeleteActive}`);
   if (envLines.length) {
     lines.push("", `## environments (Phase 2)`);
     lines.push(...envLines);
@@ -536,6 +605,8 @@ Usage:
 scan options:
   --json            emit machine-readable JSON (devmap.json schema)
   --report          emit full markdown report
+  --card            print a screenshot-friendly share card (pure ASCII/Markdown)
+  --share           write the share card to ./devmap-card.md (and print the path)
   --no-manifest     do not persist the manifest to disk
   --manifest <p>    specify the manifest location (default ~/.devmap/devmap.json)
   --disable <r1,r2> disable check rules (prefix match, e.g. path.duplicate / pip.outdated)
