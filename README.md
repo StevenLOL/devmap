@@ -43,17 +43,17 @@ irm https://raw.githubusercontent.com/StevenLOL/devmap/main/install.ps1 | iex
 Or install manually from the official sources:
 
 ```bash
-npm install -g devmap --registry=https://registry.npmjs.org/   # primary: real Node-runnable bundle
-pip install --user --index-url https://pypi.org/simple devmap     # fallback: thin wrapper (still needs Node; official PyPI)
+npm install -g devmap                       # npm — ships the real Node-runnable bundle
+pip install --user devmap                   # PyPI — also ships the real bundled app (launches it via Node/Bun)
 ```
 
 Then verify:
 
 ```bash
-devmap
+devmap --version
 ```
 
-> Prefer **npm** — it ships the real bundle. The PyPI package is a thin wrapper that still requires Node at runtime.
+> Both channels ship the **real CLI**. The npm package is a prebuilt Node-runnable bundle; the PyPI wheel embeds the same bundle (`devmap/_devmap.mjs`) and launches it with Node (or Bun) — so `pip install devmap && devmap` works standalone. Either way a JavaScript runtime must be on `PATH`; Python is only the installer/launcher wrapper.
 
 ### Install from GitHub (for AI coding agents)
 
@@ -130,7 +130,9 @@ Key `scan` flags:
 | `--quiet` | Suppress the live scan progress feedback (for scripts/CI). |
 | `--bom` | Prefix output with a UTF-8 BOM so Notepad-like viewers render it correctly (stdout redirect/pipe only). |
 | `--audit-deps` | Invoke installed SCA tools (OSV-Scanner/pip-audit/govulncheck/Trivy) and merge CVE findings into the report (opt-in, uses network). |
+| `--scan-secrets` | Scan a curated allowlist of `$HOME`/project credential files for hardcoded secrets (opt-in, fully offline, values redacted on output). |
 | `--health-network` | Also run network health probes (`npm doctor` / `rustup check`); off by default to keep scans offline-fast. |
+| `--mcp` | Run as an MCP server over stdio instead of scanning (see below). |
 
 ### `preflight` — the agent's first call (via MCP)
 
