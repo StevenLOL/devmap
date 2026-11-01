@@ -2,7 +2,7 @@
 // @bun
 
 // src/version.ts
-var VERSION = "0.4.1";
+var VERSION = "0.4.2";
 
 // src/install.ts
 function isIsolated(i) {
