@@ -136,7 +136,7 @@ Key `scan` flags:
 
 ### `preflight` — the agent's first call (via MCP)
 
-When running as an MCP server (`devmap --mcp`), agents get three tools: `scan_environment`, `query_tool`, and **`preflight`**. Call `preflight` *before* any shell command:
+When running as an MCP server (`devmap --mcp`), agents get three tools: `scan_environment`, `query_tool`, and **`preflight`**. The server targets **MCP `2026-07-28`** — the stateless core (`server/discover`, no handshake required), tool `annotations` (`readOnlyHint`), JSON Schema `outputSchema` + `structuredContent` results, and cacheable `tools/list`; the legacy `initialize` handshake is still answered for older clients. Call `preflight` *before* any shell command:
 
 ```jsonc
 // agent -> devmap (MCP)

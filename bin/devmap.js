@@ -2,7 +2,7 @@
 // @bun
 
 // src/version.ts
-var VERSION = "0.4.2";
+var VERSION = "0.4.3";
 
 // src/install.ts
 function isIsolated(i) {
@@ -1386,6 +1386,217 @@ function queryManifest(m, opts) {
 }
 
 // src/mcp.ts
+var SUPPORTED_PROTOCOLS = [
+  "2024-11-05",
+  "2025-03-26",
+  "2025-06-18",
+  "2025-11-25",
+  "2026-07-28"
+];
+var PREFERRED_PROTOCOL = "2026-07-28";
+var TOOLS_TTL_MS = 300000;
+var TOOLS_CACHE_SCOPE = "public";
+var SERVER_INFO = { name: "devmap", version: VERSION };
+var CHECK_SCHEMA = {
+  type: "object",
+  description: "One finding: a missing tool, a PATH conflict, a ghost binary, a health or security issue.",
+  required: ["ID", "Kind", "Severity", "Label", "Detail"],
+  properties: {
+    ID: { type: "string", description: "Stable rule id; pass a prefix to --disable to silence it." },
+    Kind: {
+      type: "string",
+      enum: ["missing", "conflict", "ghost", "mismatch", "stale", "vuln", "secret"]
+    },
+    Severity: { type: "string", enum: ["ok", "info", "warn", "error", "missing"] },
+    Label: { type: "string" },
+    Detail: { type: "string" },
+    Path: { type: "array", items: { type: "string" } }
+  },
+  additionalProperties: true
+};
+var MANIFEST_SCHEMA = {
+  type: "object",
+  description: "The full devmap manifest (schema devmap.manifest/1.0).",
+  required: ["meta", "summary", "checks"],
+  properties: {
+    meta: {
+      type: "object",
+      required: ["tool", "version", "generatedAt", "schema"],
+      properties: {
+        tool: { type: "string", const: "devmap" },
+        version: { type: "string" },
+        generatedAt: { type: "string", format: "date-time" },
+        schema: { type: "string" },
+        shells: { type: "array", items: { type: "string" } }
+      },
+      additionalProperties: true
+    },
+    summary: {
+      type: "object",
+      description: "Aggregates: tool/installation counts, multi-version tools, issueCountBySeverity, per-layer environment sizes.",
+      additionalProperties: true
+    },
+    checks: { type: "array", items: CHECK_SCHEMA },
+    conflicts: {
+      type: "object",
+      description: "The PATH conflict graph: multi-version groups, shadowed binaries, broken symlinks.",
+      additionalProperties: true
+    },
+    runtimes: { type: "array", items: { type: "object", additionalProperties: true } },
+    packageManagers: { type: "array", items: { type: "object", additionalProperties: true } },
+    ides: { type: "array", items: { type: "object", additionalProperties: true } },
+    environments: { type: "object", additionalProperties: true },
+    sdks: { type: "object", description: "Android / Flutter / Dart / NDK state.", additionalProperties: true },
+    windows: { type: "object", description: "Windows pre-flight state.", additionalProperties: true },
+    system: { type: "object", additionalProperties: true }
+  },
+  additionalProperties: true
+};
+var QUERY_SCHEMA = {
+  type: "object",
+  description: "A filtered view of a scan: matching tool groups, related checks, and optional conflicts.",
+  required: ["groups", "checks"],
+  properties: {
+    groups: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["id", "category", "installs"],
+        properties: {
+          id: { type: "string" },
+          category: { type: "string", enum: ["runtime", "packageManager", "ide"] },
+          installs: { type: "array", items: { type: "object", additionalProperties: true } }
+        },
+        additionalProperties: true
+      }
+    },
+    checks: { type: "array", items: CHECK_SCHEMA },
+    conflicts: { type: "object", additionalProperties: true }
+  },
+  additionalProperties: true
+};
+var PREFLIGHT_SCHEMA = {
+  type: "object",
+  description: "The pre-flight verdict: can this machine run the intended command cleanly right now?",
+  required: ["ok", "blockers", "warnings"],
+  properties: {
+    ok: { type: "boolean", description: "True when `blockers` is empty — the agent may proceed." },
+    blockers: {
+      type: "array",
+      items: { type: "string" },
+      description: "Rule ids at error severity. Non-empty ⇒ fix these before running anything."
+    },
+    warnings: { type: "array", items: { type: "string" }, description: "Rule ids at warn severity." },
+    executionPolicy: { type: ["string", "null"], description: "PowerShell execution policy, if applicable." },
+    languageMode: {
+      type: ["string", "null"],
+      description: "PowerShell language mode (ConstrainedLanguage blocks agents)."
+    },
+    codepage: { type: ["integer", "null"], description: "Active console code page (936 = GBK)." },
+    schannelRevoke: { type: ["boolean", "null"], description: "Whether schannel does cert-revocation checks." },
+    windows: {
+      type: "object",
+      properties: {
+        present: { type: "boolean" },
+        appAliases: { type: "integer", description: "App Execution Aliases that can shadow a real binary." },
+        safeDelete: { type: "boolean", description: "Whether a safe-delete shim makes deletions fail closed." }
+      },
+      additionalProperties: true
+    },
+    sdk: {
+      type: "object",
+      description: "Android / Flutter / Dart state, or null when the toolchain is absent.",
+      additionalProperties: true
+    },
+    pathConflicts: {
+      type: "integer",
+      description: "Number of PATH conflicts that could change which binary runs."
+    }
+  },
+  additionalProperties: true
+};
+var READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true };
+var TOOLS = [
+  {
+    name: "scan_environment",
+    description: "Run a full devmap scan of the local development environment and return the structured manifest " + "(detected tools across runtimes/pkg-managers/IDEs, PATH conflicts & ghost binaries, per-env health " + "checks, and the security posture). Use this first to understand a machine before proposing changes.",
+    annotations: { ...READ_ONLY, openWorldHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        shells: {
+          type: "string",
+          description: "Comma-separated shell views to reconstruct: current|powershell|gitbash|wsl|all (default current)"
+        },
+        disable: {
+          type: "string",
+          description: "Comma-separated check-rule prefixes to skip, e.g. 'path.duplicate,health.conda.base'"
+        },
+        auditDeps: {
+          type: "boolean",
+          description: "Opt-in dependency CVE audit via installed SCA tools (OSV-Scanner/pip-audit/govulncheck/Trivy). Uses network."
+        },
+        healthNetwork: {
+          type: "boolean",
+          description: "Also run network health probes (npm doctor / rustup check). Off by default to stay offline-fast."
+        },
+        scanSecrets: {
+          type: "boolean",
+          description: "Opt-in: scan a curated allowlist of HOME/project credential files for hardcoded secrets (offline)."
+        }
+      }
+    },
+    outputSchema: MANIFEST_SCHEMA
+  },
+  {
+    name: "query_tool",
+    description: "Query a scan for a specific tool, semantic category, conflict, or issue — e.g. selector 'node', " + "'runtime.node', 'pkg.npm', 'git', or 'python'. Returns matching installs plus any related findings. " + "Cheaper than a full scan when you already know what you are looking for.",
+    annotations: { ...READ_ONLY, openWorldHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        selector: {
+          type: "string",
+          description: "Tool id substring or 'category.tool' dotted form (e.g. node / runtime.node / pkg.npm)"
+        },
+        issuesOnly: { type: "boolean", description: "Only return issues (warn/error/missing) for the match" },
+        conflictsOnly: { type: "boolean", description: "Only return PATH/version/ghost conflicts for the match" },
+        offPathOnly: {
+          type: "boolean",
+          description: "Only return isolated off-PATH installs (version-manager envs excluded)"
+        },
+        shells: { type: "string", description: "Shell views (see scan_environment)" },
+        disable: { type: "string", description: "Check-rule prefixes to skip (see scan_environment)" }
+      },
+      required: ["selector"]
+    },
+    outputSchema: QUERY_SCHEMA
+  },
+  {
+    name: "preflight",
+    description: "Agent pre-flight oracle: call this BEFORE running any shell command on the user's machine. " + "Returns a structured 'can this machine run my command cleanly right now' verdict -- Windows " + "constraints (execution policy, language mode, codepage, schannel revocation, app aliases, " + "safe-delete), mobile SDK state (Android/Flutter/Dart), and PATH conflict count. If 'blockers' " + "is non-empty the agent should fix (or ask the user to fix) those first, rather than discovering " + "failure mid-run (the gemini-cli #12519 'could not be parsed safely' class of failure).",
+    annotations: { ...READ_ONLY, openWorldHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: {
+          type: "string",
+          description: "Shell the agent intends to drive: powershell | cmd | gitbash | wsl (default current)"
+        },
+        forAgent: {
+          type: "boolean",
+          description: "When true, emphasise agent-relevant constraints (language mode, execution policy, codepage)"
+        },
+        disable: {
+          type: "string",
+          description: "Comma-separated check-rule prefixes to skip, e.g. 'health.conda' to keep preflight fast"
+        }
+      }
+    },
+    outputSchema: PREFLIGHT_SCHEMA
+  }
+];
+var TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
 var ALL_SHELLS = ["current", "powershell", "gitbash", "wsl"];
 function parseShells(v) {
   if (typeof v !== "string" || !v)
@@ -1441,103 +1652,105 @@ function buildPreflight(manifest) {
     pathConflicts: pathConflicts.length
   };
 }
-var TOOLS = [
-  {
-    name: "scan_environment",
-    description: "Run a full devmap scan of the local development environment and return the structured manifest " + "(detected tools across runtimes/pkg-managers/IDEs, PATH conflicts & ghost binaries, per-env health " + "checks, and the security posture). Use this first to understand a machine before proposing changes.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        shells: {
-          type: "string",
-          description: "Comma-separated shell views to reconstruct: current|powershell|gitbash|wsl|all (default current)"
-        },
-        disable: {
-          type: "string",
-          description: "Comma-separated check-rule prefixes to skip, e.g. 'path.duplicate,health.conda.base'"
-        },
-        auditDeps: {
-          type: "boolean",
-          description: "Opt-in dependency CVE audit via installed SCA tools (OSV-Scanner/pip-audit/govulncheck/Trivy). Uses network."
-        },
-        healthNetwork: {
-          type: "boolean",
-          description: "Also run network health probes (npm doctor / rustup check). Off by default to stay offline-fast."
-        },
-        scanSecrets: {
-          type: "boolean",
-          description: "Opt-in: scan a curated allowlist of HOME/project credential files for hardcoded secrets (offline)."
-        }
-      }
-    }
-  },
-  {
-    name: "query_tool",
-    description: "Query a scan for a specific tool, semantic category, conflict, or issue — e.g. selector 'node', " + "'runtime.node', 'pkg.npm', 'git', or 'python'. Returns matching installs plus any related findings. " + "Cheaper than a full scan when you already know what you are looking for.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        selector: {
-          type: "string",
-          description: "Tool id substring or 'category.tool' dotted form (e.g. node / runtime.node / pkg.npm)"
-        },
-        issuesOnly: { type: "boolean", description: "Only return issues (warn/error/missing) for the match" },
-        conflictsOnly: { type: "boolean", description: "Only return PATH/version/ghost conflicts for the match" },
-        offPathOnly: { type: "boolean", description: "Only return isolated off-PATH installs (version-manager envs excluded)" },
-        shells: { type: "string", description: "Shell views (see scan_environment)" },
-        disable: { type: "string", description: "Check-rule prefixes to skip (see scan_environment)" }
-      }
-    }
-  },
-  {
-    name: "preflight",
-    description: "Agent pre-flight oracle: call this BEFORE running any shell command on the user's machine. " + "Returns a structured 'can this machine run my command cleanly right now' verdict -- Windows " + "constraints (execution policy, language mode, codepage, schannel revocation, app aliases, " + "safe-delete), mobile SDK state (Android/Flutter/Dart), and PATH conflict count. If 'blockers' " + "is non-empty the agent should fix (or ask the user to fix) those first, rather than discovering " + "failure mid-run (the gemini-cli #12519 'could not be parsed safely' class of failure).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        target: {
-          type: "string",
-          description: "Shell the agent intends to drive: powershell | cmd | gitbash | wsl (default current)"
-        },
-        forAgent: {
-          type: "boolean",
-          description: "When true, emphasise agent-relevant constraints (language mode, execution policy, codepage)"
-        }
-      }
-    }
-  }
-];
-async function callTool(name, args) {
+function wrap(structured) {
+  return {
+    content: [{ type: "text", text: JSON.stringify(structured, null, 2) }],
+    structuredContent: structured,
+    isError: false
+  };
+}
+async function callTool(name, rawArgs, deps = {}) {
+  const scan = deps.scan ?? runScan;
+  const query = deps.query ?? queryManifest;
+  const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {};
   if (name === "scan_environment") {
-    const manifest = await runScan(parseShells(args.shells), parseDisable(args.disable), {
+    const manifest = await scan(parseShells(args.shells), parseDisable(args.disable), {
       silent: true,
       auditDeps: args.auditDeps === true,
       healthNetwork: args.healthNetwork === true,
       scanSecrets: args.scanSecrets === true
     });
-    return { content: [{ type: "text", text: JSON.stringify(manifest, null, 2) }], isError: false };
+    return wrap(manifest);
   }
   if (name === "query_tool") {
-    const manifest = await runScan(parseShells(args.shells), parseDisable(args.disable), { silent: true });
-    const result = queryManifest(manifest, {
+    const manifest = await scan(parseShells(args.shells), parseDisable(args.disable), { silent: true });
+    const result = query(manifest, {
       selector: typeof args.selector === "string" ? args.selector : undefined,
       issues: args.issuesOnly === true,
       conflicts: args.conflictsOnly === true,
       offPath: args.offPathOnly === true
     });
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: false };
+    return wrap(result);
   }
   if (name === "preflight") {
-    const manifest = await runScan(targetToShells(args.target), parseDisable(args.disable), {
+    const manifest = await scan(targetToShells(args.target), parseDisable(args.disable), {
       silent: true,
       fast: true
     });
-    return {
-      content: [{ type: "text", text: JSON.stringify(buildPreflight(manifest), null, 2) }],
-      isError: false
-    };
+    return wrap(buildPreflight(manifest));
   }
-  return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true };
+  throw new Error(`unknown tool: ${name}`);
+}
+var ok = (id, result) => ({ jsonrpc: "2.0", id, result });
+var fail = (id, code, message) => ({ jsonrpc: "2.0", id, error: { code, message } });
+function negotiateProtocol(requested) {
+  if (typeof requested === "string" && SUPPORTED_PROTOCOLS.includes(requested)) {
+    return requested;
+  }
+  return PREFERRED_PROTOCOL;
+}
+function discoverResult(deps) {
+  return {
+    protocolVersion: PREFERRED_PROTOCOL,
+    capabilities: { tools: {} },
+    serverInfo: deps.serverInfo ?? SERVER_INFO
+  };
+}
+async function handleMessage(msg, deps = {}) {
+  if (!msg || typeof msg !== "object" || Array.isArray(msg))
+    return fail(null, -32600, "invalid request");
+  const id = msg.id;
+  const method = msg.method;
+  if (typeof method !== "string" || !method) {
+    return id === undefined ? null : fail(id, -32600, "missing method");
+  }
+  const params = msg.params && typeof msg.params === "object" ? msg.params : {};
+  switch (method) {
+    case "initialize":
+      return ok(id, {
+        protocolVersion: negotiateProtocol(params.protocolVersion),
+        capabilities: { tools: {} },
+        serverInfo: deps.serverInfo ?? SERVER_INFO,
+        instructions: "devmap is a read-only environment oracle. Call `preflight` before running shell commands; " + "call `scan_environment` when you need the full manifest."
+      });
+    case "server/discover":
+      return ok(id, discoverResult(deps));
+    case "notifications/initialized":
+    case "initialized":
+    case "notifications/cancelled":
+      return null;
+    case "ping":
+      return ok(id, {});
+    case "tools/list":
+      return ok(id, { tools: TOOLS, ttlMs: TOOLS_TTL_MS, cacheScope: TOOLS_CACHE_SCOPE });
+    case "tools/call": {
+      const name = params.name;
+      if (typeof name !== "string" || !name)
+        return fail(id, -32602, "missing tool name");
+      if (!TOOL_NAMES.has(name))
+        return fail(id, -32602, `unknown tool: ${name}`);
+      try {
+        return ok(id, await callTool(name, params.arguments, deps));
+      } catch (e) {
+        return ok(id, {
+          content: [{ type: "text", text: "error: " + (e?.message || String(e)) }],
+          isError: true
+        });
+      }
+    }
+    default:
+      return id === undefined ? null : fail(id, -32601, `method not found: ${method}`);
+  }
 }
 async function startMcpServer() {
   const toErr = (...a) => process.stderr.write(a.map((x) => typeof x === "string" ? x : String(x)).join(" ") + `
@@ -1567,52 +1780,10 @@ async function startMcpServer() {
         log("[mcp] dropping malformed frame");
         continue;
       }
-      const id = msg.id;
-      const method = msg.method;
-      log("[mcp] ->", method || "?", id ?? "");
-      if (!method) {
-        if (id !== undefined)
-          write({ jsonrpc: "2.0", id, error: { code: -32600, message: "missing method" } });
-        continue;
-      }
-      switch (method) {
-        case "initialize":
-          write({
-            jsonrpc: "2.0",
-            id,
-            result: {
-              protocolVersion: msg.params?.protocolVersion || "2024-11-05",
-              capabilities: { tools: {} },
-              serverInfo: { name: "devmap", version: VERSION }
-            }
-          });
-          break;
-        case "notifications/initialized":
-        case "initialized":
-        case "notifications/cancelled":
-          break;
-        case "ping":
-          write({ jsonrpc: "2.0", id, result: {} });
-          break;
-        case "tools/list":
-          write({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
-          break;
-        case "tools/call":
-          try {
-            const r = await callTool(msg.params?.name, msg.params?.arguments || {});
-            write({ jsonrpc: "2.0", id, result: r });
-          } catch (e) {
-            write({
-              jsonrpc: "2.0",
-              id,
-              result: { content: [{ type: "text", text: "error: " + (e?.message || String(e)) }], isError: true }
-            });
-          }
-          break;
-        default:
-          if (id !== undefined)
-            write({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } });
-      }
+      log("[mcp] ->", msg.method || "?", msg.id ?? "");
+      const res = await handleMessage(msg);
+      if (res !== null)
+        write(res);
     }
   }
   log("[mcp] stdin closed, shutting down");
